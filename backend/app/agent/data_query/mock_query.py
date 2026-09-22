@@ -3,15 +3,18 @@
 ⚠️ 这个模块**不是数据库执行器**，它跑不了任何 SQL，也不打算跑。
 它做的是：看一眼意图，从四份写死的表格里挑一份返回。
 
-为什么 `execute_mock_query` 的参数里有个 `sql`，却完全不用它？
-因为签名要按**将来真实的执行器**来定：真实执行器必须拿到 SQL 才能查库。
-现在就把这个「节点把 SQL 交给执行器」的接口方向固定下来，
-将来把本模块换成真的数据库执行器时，execute_query 节点一行都不用改。
+**它现在不再是生产默认值。** 真实执行器是
+query_execution.execute_real_query（走数据中台安全查询服务）。
+本模块保留下来，专门用于三种场合：
+- 单元测试；
+- 没有数据库的环境下演示整条 Agent 流程；
+- 需要精确构造结果的测试。
 
-这不是「预留接口」式的空想——它有个立即可见的好处：
-节点必须真的持有并传递 sql_draft，这条数据流从第一天就是通的。
-如果这里省掉 sql 参数，将来替换时就会发现节点根本没把 SQL 传下来，
-得回头改节点、改测试、改接线。
+为什么 `execute_mock_query` 的参数里有个 `sql`，却完全不用它？
+因为这个签名当初就是按**真实执行器**的形状定的：真实执行器必须拿到 SQL
+才能查库。事后来看这个判断是对的——真实执行器接进来时，
+execute_query 节点里那句 `await query_executor(sql=..., intent=...)` 一行都没改，
+变的只是注进去的实现。
 
 本模块不导入 sqlglot（不解析 SQL）、不导入数据库驱动、不读环境变量，
 是纯粹的常量 + 纯函数。
@@ -114,3 +117,17 @@ def execute_mock_query(*, sql: str, intent: Intent) -> QueryResult:
     if template is None:
         return copy.deepcopy(EMPTY_RESULT)
     return copy.deepcopy(template)
+
+
+async def execute_mock_query_async(*, sql: str, intent: Intent) -> QueryResult:
+    """execute_mock_query 的异步外壳，用来满足执行器的统一契约。
+
+    为什么需要这一层？因为真实执行器必须 await（它要等数据库），
+    节点的代码路径只有一条：
+        result = await query_executor(sql=..., intent=...)
+    如果 mock 执行器是同步的，节点就得写「先判断是不是协程」之类的分支，
+    那才是真正的复杂度。让两个实现长得一样，节点才能对来源一无所知。
+
+    真正的逻辑仍然只在 execute_mock_query 里，本函数不做任何加工。
+    """
+    return execute_mock_query(sql=sql, intent=intent)

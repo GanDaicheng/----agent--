@@ -40,9 +40,16 @@ suggest_visualization → finish。用户最终看到的不是「返回了 N 行
 执行日志，而是「一段分析结论 + 一份前端可渲染的图表配置」。
 
 最后三个节点里有三个用到了模型（understand_question / generate_sql /
-repair_sql），两个纯本地（execute_query 是模拟数据，suggest_visualization
-是规则引擎），一个纯本地且不注入也不能换（validate_sql）。
+repair_sql），一个取真实数据（execute_query，走数据中台安全查询服务），
+一个纯本地（suggest_visualization 是规则引擎），一个纯本地且不注入也不能换
+（validate_sql）。
 **不是每个 Agent 节点都需要 LLM** —— 见 visualization.py 的说明。
+
+**execute_query 是全图唯一的异步节点**，因为它要 await 数据服务。
+LangGraph 只要图里有一个异步节点，就拒绝同步 invoke
+（TypeError: No synchronous function provided to "execute_query"），
+所以本图必须用 `await graph.ainvoke(...)` 驱动。其余节点保持同步不动——
+只把真正需要 I/O 的那个节点异步化，比把整张图都改成 async 改动面小得多。
 
 图里**唯一一条回边**是 repair_sql → validate_sql。它不会变成死循环，
 因为 route_after_validation 要求 `retry_count < MAX_SQL_RETRY` 才会放行，
@@ -54,15 +61,15 @@ finish 出去。除了这条，其余所有边都朝同一个方向（从 START 
 不依赖任何业务逻辑，是纯粹的步数硬上限 —— 万一推理失效，它保证进程
 不会卡死，而是抛一个明确的 GraphRecursionError。
 
-后续接真实节点时，按 constants.PLANNED_NODE_ORDER 的顺序补 add_node / add_edge。
-
 本模块的 build_graph() 接受六个可选的替身参数：classifier、sql_generator、
-sql_repairer、mock_executor、result_explainer、chart_suggester。不传时用
+sql_repairer、query_executor、result_explainer、chart_suggester。不传时用
 真实的——也就是说测试和生产走的是同一段接线代码，唯一的差别就是注入的
-那几个参数。
+那几个参数。query_executor 的缺省值是 execute_real_query（真实取数），
+要用模拟数据请显式调 build_mock_data_query_graph()。
 
 本模块不直接导入 app.core.llm（那件事由 intent.py / sql_generation.py 负责），
-也不导入数据库相关模块，不读 .env。
+不导入 sqlalchemy / asyncpg，也不读 .env。唯一与数据库沾边的是
+query_execution 这个模块，而它只调用数据中台的服务函数。
 """
 
 from collections.abc import Callable
@@ -85,7 +92,7 @@ from app.agent.data_query.constants import (
     NODE_VALIDATE_SQL,
 )
 from app.agent.data_query.intent import IntentClassification, classify_intent
-from app.agent.data_query.mock_query import execute_mock_query
+from app.agent.data_query.mock_query import execute_mock_query_async
 from app.agent.data_query.nodes import (
     discover_assets,
     execute_query,
@@ -98,6 +105,7 @@ from app.agent.data_query.nodes import (
     understand_question,
     validate_sql,
 )
+from app.agent.data_query.query_execution import QueryExecutor, execute_real_query
 from app.agent.data_query.result_explanation import (
     ResultExplanation,
     explain_query_result,
@@ -107,7 +115,7 @@ from app.agent.data_query.sql_generation import (
     generate_sql_draft,
     repair_sql_draft,
 )
-from app.agent.data_query.state import ChartSuggestion, DataQueryState, QueryResult
+from app.agent.data_query.state import ChartSuggestion, DataQueryState
 from app.agent.data_query.visualization import suggest_chart
 
 
@@ -186,17 +194,26 @@ def build_graph(
     classifier: Callable[[str], IntentClassification] = classify_intent,
     sql_generator: Callable[[str, str, list], SqlDraft] = generate_sql_draft,
     sql_repairer: Callable[[str, str, list, str, list], SqlDraft] = repair_sql_draft,
-    mock_executor: Callable[..., QueryResult] = execute_mock_query,
+    query_executor: QueryExecutor = execute_real_query,
     result_explainer: Callable[..., ResultExplanation] = explain_query_result,
     chart_suggester: Callable[..., ChartSuggestion] = suggest_chart,
 ):
     """组装并编译 Graph。每次调用都返回独立的新实例，测试里可以随便建。
 
-    六个参数缺省都是真实实现；测试传入替身即可完全不碰网络。
+    六个参数缺省都是真实实现；测试传入替身即可完全不碰网络与数据库。
+
+    query_executor 的缺省值是 execute_real_query——它会调用数据中台的
+    execute_safe_query 读取真实 PostgreSQL。**生产图不会悄悄退回 mock**：
+    想用模拟数据必须显式走 build_mock_data_query_graph()。
 
     注意最后那个 chart_suggester：它注入的是个**纯函数**，不是模型调用。
     保留这个注入点的理由是测试——要构造「建议器抛异常」这种场景，
     只能靠替换实现。
+
+    ⚠️ 本图必须用 ainvoke 驱动（或者 astream），不能用 invoke。
+    execute_query 是异步节点（它要 await 数据服务），而 LangGraph 只要
+    图里有一个异步节点，就拒绝同步 invoke：
+        TypeError: No synchronous function provided to "execute_query"
     """
     builder = StateGraph(DataQueryState)
 
@@ -220,7 +237,7 @@ def build_graph(
     )
     builder.add_node(
         NODE_EXECUTE_QUERY,
-        partial(execute_query, mock_executor=mock_executor),
+        partial(execute_query, query_executor=query_executor),
     )
     builder.add_node(
         NODE_EXPLAIN_RESULT,
@@ -303,7 +320,24 @@ def get_data_query_graph():
     测试想拿到全新实例时直接调 build_graph()，不受缓存影响。
 
     注意这里**不能**传替身：这是生产入口，用的必须是真实的
-    classifier、sql_generator、sql_repairer、mock_executor、
-    result_explainer 和 chart_suggester。
+    classifier、sql_generator、sql_repairer、query_executor、
+    result_explainer 和 chart_suggester。query_executor 是
+    execute_real_query —— 也就是说它读的是真实 PostgreSQL。
+
+    调用方必须用 ainvoke，原因见 build_graph 的说明。
     """
     return build_graph()
+
+
+def build_mock_data_query_graph(**overrides):
+    """显式使用**模拟执行器**的图。
+
+    只用于三种场合：单元测试、没有数据库的环境下演示整条流程、
+    以及需要精确构造结果的测试。
+
+    单独做成一个工厂而不是给 build_graph 加开关，是为了让「用模拟数据」
+    这件事在调用点显而易见：读到 build_mock_data_query_graph() 就知道
+    这次不会碰数据库。反过来，build_graph() 永远是真实的。
+    """
+    overrides.setdefault("query_executor", execute_mock_query_async)
+    return build_graph(**overrides)

@@ -387,6 +387,210 @@ python scripts/verify_retail_data.py
 注意 `alembic.ini` 必须保持纯 ASCII：Alembic 会按操作系统区域编码读取该文件，
 在中文 Windows 上按 GBK 解析，写入中文注释会直接抛 `UnicodeDecodeError`。
 
+## 数据服务：受控只读查询接口
+
+数据中台阶段的第 2 小步：提供一个受控的分析 SQL 查询服务，让调用方提交**经过严格限制的
+只读 SELECT**，拿到结构化结果。它属于**数据中台**，与 AI 中台无关——
+`app/services/safe_query.py` 不导入 `app.agent`、LangGraph 或任何模型 SDK，有测试用 AST 检查守住这条边界。
+
+### 接口
+
+```text
+POST /api/v1/data/query
+```
+
+请求：
+
+```json
+{
+  "sql": "SELECT date_dim.month, SUM(orders.net_amount) AS sales_amount FROM orders JOIN date_dim ON orders.date_id = date_dim.date_id GROUP BY date_dim.month ORDER BY date_dim.month LIMIT 12"
+}
+```
+
+响应：
+
+```json
+{
+  "columns": ["month", "sales_amount"],
+  "rows": [{ "month": 1, "sales_amount": 140892.02 }],
+  "row_count": 12,
+  "source": "postgres"
+}
+```
+
+`columns` 与 `rows` 中每个字典的键顺序一致，`row_count == len(rows)`，响应里**不含原始 SQL**。
+
+### 两条防线
+
+```text
+调用方 SQL
+→ 第 1 道：sqlglot AST 校验（validate_safe_select，纯函数）
+→ 第 2 道：PostgreSQL 只读事务 + statement/lock timeout（run_readonly_query）
+→ PostgreSQL
+→ 限制行数的结构化结果
+```
+
+第 2 道不是摆设：即使绕过第 1 道直接把 `DELETE FROM orders` 交给执行层，
+数据库也会以 `read_only_sql_transaction`（SQLSTATE 25006）拒绝，数据一行都不会变。
+
+`SET TRANSACTION READ ONLY` 必须是事务里的第一条语句——PostgreSQL 规定它前面若已执行过查询，
+只会发一个警告然后**静默忽略**只读设置，所以三条设置语句的顺序在代码里是固定的。
+
+### 允许的内容
+
+| 项 | 白名单 |
+| --- | --- |
+| 表 | `customers` `products` `regions` `date_dim` `orders` |
+| 函数 | `COUNT` `SUM` `AVG` `MIN` `MAX`（含 `COUNT(DISTINCT ...)`） |
+| 语句形态 | 单条 `SELECT`，`JOIN` / `WHERE` / `GROUP BY` / `ORDER BY` / `LIMIT` / `AS` 别名 |
+
+字段白名单登记在 `safe_query.py` 的 `ALLOWED_COLUMNS`，字段必须写完整表名
+（`orders.net_amount`，`net_amount` 会被拒绝）。`ORDER BY sales_amount` 这种引用输出别名的
+标准写法是允许的——别名只能指向已经校验过的投影。
+
+### 拒绝的内容
+
+`INSERT` / `UPDATE` / `DELETE` / `MERGE` / `DROP` / `ALTER` / `CREATE` / `TRUNCATE` / `GRANT` /
+`COPY` / `EXPLAIN`、多语句、SQL 注释、`SELECT *`、CTE、子查询、`UNION`、窗口函数、`CASE`、
+未登记的表（含 `information_schema` / `pg_catalog`）、未登记的字段、未限定表名的字段、
+白名单外的任何函数（`pg_sleep`、`current_setting`、`version()` 等）。
+
+`LIMIT` **必须存在**且为 1~200 的整数字面量，缺失即拒绝——服务端不替调用方补 LIMIT，
+否则调用方会误以为自己的查询没有上限。
+
+### 状态码
+
+| 场景 | 状态码 |
+| --- | ---: |
+| 合规查询执行成功 | 200 |
+| 请求体缺少 `sql` 或长度非法 | 422 |
+| SQL 未通过安全策略 | 422 |
+| 已通过安全校验但语句执行失败（字段类型不符、超时被取消等） | 400 |
+| 数据库不可用 | 503 |
+| 服务端配置缺失、结果无法安全序列化 | 500 |
+
+失败响应只回显**预定义的中文文案**（如「仅允许执行单条 SELECT 查询。」），
+不回显原始 SQL、连接串、密码或数据库异常原文。
+
+### 试一下
+
+```powershell
+# 趋势查询
+curl -s -X POST http://localhost:8000/api/v1/data/query `
+  -H "Content-Type: application/json" `
+  -d '{\"sql\":\"SELECT date_dim.month, SUM(orders.net_amount) AS sales_amount FROM orders JOIN date_dim ON orders.date_id = date_dim.date_id GROUP BY date_dim.month ORDER BY date_dim.month LIMIT 12\"}'
+
+# 危险语句：应返回 422
+curl -s -X POST http://localhost:8000/api/v1/data/query `
+  -H "Content-Type: application/json" -d '{\"sql\":\"DELETE FROM orders\"}'
+```
+
+接口与请求/响应模型可以在 http://localhost:8000/docs 中查看。
+
+### 安全边界（务必阅读）
+
+这是**本地开发原型**：接口**没有身份认证、没有权限控制、没有行级数据权限**，
+任何能访问 8000 端口的人都可以查询这五张表的白名单字段。
+
+生产环境必须补齐：身份认证、按用户/角色的表与字段授权、行级数据权限过滤、
+按调用方的限流与配额，以及把 SQL 审计写入独立通道（而不是普通应用日志）。
+本服务目前**故意不在普通日志里记录 SQL 原文**。
+
+## 智能问数 Agent 的数据来源
+
+数据中台阶段的第 3 小步：把 LangGraph 智能问数 Agent 的默认查询执行器从
+「模拟数据」换成「数据中台安全查询服务」，让它读真实 PostgreSQL。
+
+### 完整链路
+
+```text
+用户自然语言问题
+→ intake / understand_question（LLM 识别意图）
+→ discover_assets（检索已登记资产）
+→ generate_sql（LLM 生成 SQL 草稿）
+→ validate_sql（Agent 第 1 层 AST 校验）
+→ execute_query（await 执行器）
+     → query_execution.execute_real_query
+     → app.services.safe_query.execute_safe_query（第 2 层 AST 校验 + 只读事务）
+     → PostgreSQL 真实零售样例数据
+→ explain_result（LLM 解读结果）
+→ suggest_visualization（纯规则给出图表建议）
+→ finish
+```
+
+### 三条边界
+
+| 边界 | 做法 |
+| --- | --- |
+| Agent 不直接连数据库 | 不导入 SQLAlchemy / asyncpg / repository，只调用 `execute_safe_query` |
+| 不经 HTTP 调用自己 | 同进程内直接调服务函数，不走 `localhost:8000` |
+| 两层 SQL 校验都保留 | Agent 的 `validate_sql` 管工作流与 repair；数据服务的校验管数据库 |
+
+有测试用 **AST 扫描** agent 包的全部 import 语句，确认它没有引入数据库驱动、
+HTTP 客户端或第二套连接；并确认整个 agent 包只有 `query_execution.py`
+一个模块接入数据服务。
+
+### 异步集成
+
+`execute_safe_query` 是异步的，所以 `execute_query` 是全图**唯一**的异步节点。
+LangGraph 只要图里有一个异步节点，就拒绝同步 `invoke()`：
+
+```text
+TypeError: No synchronous function provided to "execute_query"
+```
+
+因此图必须用 `await graph.ainvoke(...)` 驱动。其余节点保持同步不动——
+只把真正需要 I/O 的那个节点异步化，比把整张图改成 async 改动面小得多。
+测试端把 `asyncio.run(...)` 收在**唯一一个** `run_graph` 辅助函数里，
+不散落到几百个测试中（测试入口本身不在事件循环里，所以这样用是安全的）。
+
+### 数据来源标记
+
+`QueryResult.source` 只有两个取值：
+
+```text
+mock     内置模拟数据（结论会追加「基于模拟数据」说明）
+postgres 数据中台安全查询服务返回的真实数据（不追加该说明）
+```
+
+解释节点的系统提示词也按来源选择：真实数据那一版不会说「这些是模拟数据」，
+避免对着真实数据说出误导性的话。
+
+### 模拟执行器仍在
+
+`mock_query.py` 没有被删除，`execute_mock_query()` 也保持不变。它现在只用于
+单元测试和无数据库时的演示，入口是显式的：
+
+```python
+build_graph()                    # 生产：execute_real_query，读真实数据
+build_mock_data_query_graph()    # 演示/测试：execute_mock_query_async
+```
+
+生产图**不会**悄悄回退到 mock。
+
+### 真实数据库冒烟验证
+
+```powershell
+cd backend
+python tests/smoke_agent_real_query.py
+```
+
+脚本名不以 `test_` 开头，所以 pytest 不会收集它——**默认测试套件不依赖数据库**。
+它会用假的分类器 / SQL 生成器 / 解释器（因此不调用任何真实 LLM）+ 真实的
+`execute_safe_query` 跑完整条链路，并在前后各统计一次 orders 的行数与净销售额，
+证明整个过程没有改动样例数据。
+
+### 已知限制
+
+Agent 的 `validate_sql` 要求每个字段都带表名，因此 `ORDER BY <输出别名>`
+（例如 `ORDER BY sales_amount DESC`）会被判成「未限定表名」而拒绝——
+而数据服务那一层是允许别名引用的。模型很自然会写出这种写法，
+第一次校验会被拒、用掉唯一一次修复机会。
+
+绕过方式：把 `ORDER BY sales_amount` 写成 `ORDER BY SUM(orders.net_amount)`。
+本阶段按边界要求没有修改 Agent 的校验器，这条差异有专门的测试记录在案
+（`test_agent_validator_still_rejects_an_order_by_alias`）。
+
 ## 本地启动前端
 
 前端是独立的 Next.js 工程，与后端分开启动。
@@ -444,6 +648,8 @@ npm run start    # 以生产模式启动，需先 build
 - [x] 阶段四：Next.js + TypeScript 前端工程初始化（占位首页）
 - [x] 阶段四·补：三服务容器化（后端/前端生产镜像 + Compose 健康依赖链 + 统一健康检查 `/api/v1/health`）
 - [x] 阶段五：Alembic 初始化配置与零售样例数仓（五张表 + 幂等种子数据 + 只读验证脚本）
+- [x] 阶段五·补：数据服务受控只读查询接口（AST 安全校验 + 只读事务 + 结构化结果，POST `/api/v1/data/query`）
+- [x] 阶段五·补：智能问数 Agent 接入真实数据（默认执行器改为数据中台服务，mock 保留供测试）
 - [ ] 阶段六：数据目录与指标语义层
 - [ ] 阶段七：安全 SQL 生成与查询执行
 - [ ] 阶段八：运行记录与可观测性

@@ -41,7 +41,14 @@ from pydantic import BaseModel
 
 from app.agent.data_query.constants import MAX_SQL_RETRY
 from app.agent.data_query.intent import IntentClassification, classify_intent
-from app.agent.data_query.mock_query import execute_mock_query
+from app.agent.data_query.query_execution import (
+    CONTRACT_MESSAGE,
+    QueryExecutor,
+    QueryResultContractError,
+    describe_execution_failure,
+    ensure_query_result_contract,
+    execute_real_query,
+)
 from app.agent.data_query.result_explanation import (
     ResultExplanation,
     explain_query_result,
@@ -53,7 +60,7 @@ from app.agent.data_query.sql_generation import (
     repair_sql_draft,
 )
 from app.agent.data_query.sql_validation import validate_sql_draft
-from app.agent.data_query.state import ChartSuggestion, DataQueryState, QueryResult
+from app.agent.data_query.state import ChartSuggestion, DataQueryState
 from app.agent.data_query.tools import search_datasets, search_metrics
 from app.agent.data_query.visualization import suggest_chart
 
@@ -62,15 +69,29 @@ from app.agent.data_query.visualization import suggest_chart
 INTENT_ERROR_MESSAGE = "意图识别失败，请稍后重试。"
 SQL_GENERATION_ERROR_MESSAGE = "SQL 草稿生成失败，请稍后重试。"
 SQL_REPAIR_ERROR_MESSAGE = "SQL 草稿修复失败，请稍后重试。"
-MOCK_EXECUTION_ERROR_MESSAGE = "模拟查询执行失败，请稍后重试。"
 EXPLANATION_ERROR_MESSAGE = "分析结论生成失败，请稍后重试。"
 CHART_SUGGESTION_ERROR_MESSAGE = "图表建议生成失败，请稍后重试。"
 
 # 前置条件不满足时的文案。这里只说「没通过校验」，不说是哪条校验没过——
 # 校验问题原文属于内部细节，不该顺着 error 漏到接口响应里。
-EXECUTION_BLOCKED_MESSAGE = "查询草稿尚未通过安全校验，无法执行模拟查询。"
+EXECUTION_BLOCKED_MESSAGE = "查询草稿尚未通过安全校验，无法执行查询。"
 RESULT_MISSING_MESSAGE = "查询结果缺失，无法生成分析结论。"
 CHART_RESULT_MISSING_MESSAGE = "查询结果缺失，无法生成图表建议。"
+
+# execute_query 的事件模板。
+#
+# 成功事件按数据来源分开措辞，不共用一句「查询完成」：真实数据和模拟数据
+# 对用户是完全不同的信息。把模拟结果说成真实查询是误导，反过来同样是误导。
+# 用 dict 而不是 if/else，是为了将来新增来源时只加一行，不用改逻辑。
+QUERY_RESULT_EVENT = {
+    "mock": "execute_query：模拟查询完成，返回 {row_count} 行结果",
+    "postgres": "execute_query：真实数据查询完成，返回 {row_count} 行结果",
+}
+
+# 失败事件统一一条：出错时还没有结果，也就无从判断来源，
+# 所以措辞保持中性，只带上安全类别（异常类名）。
+EXECUTION_FAILURE_EVENT = "execute_query：数据查询未完成（{category}）"
+QUERY_RESULT_CONTRACT_EVENT = "execute_query：查询结果不符合约定，已终止（{category}）"
 
 # finish 的几种收尾文案。
 # 全部定义在这里而不是散落在分支里：这些是**面向用户的最终话术**，
@@ -335,21 +356,26 @@ def repair_sql(
     }
 
 
-def execute_query(
+async def execute_query(
     state: DataQueryState,
-    mock_executor: Callable[..., QueryResult] = execute_mock_query,
+    query_executor: QueryExecutor = execute_real_query,
 ) -> dict:
-    """模拟查询执行节点：SQL 通过安全校验后，产出一份结构化结果。
+    """查询执行节点：SQL 通过安全校验后，向数据中台读取真实数据。
 
-    ⚠️ 它**不执行任何 SQL**。真正的执行器是 mock_query.execute_mock_query，
-    那个函数只看 intent，从写死的四张表里挑一份返回。
-    本节点做的事是：检查前置条件、调用执行器、把结果写进 State。
+    **这是本 Agent 里唯一会真正取数的节点**，也是唯一的异步节点：
+    真实执行器要 await 数据中台的安全查询服务，同步函数没法等它，
+    所以整张图改用 ainvoke 驱动（见 graph.py 的说明）。
 
-    为什么这仍然值得单独做成一个节点？
-    因为「什么时候才允许进入执行阶段」本身就是一条重要的业务规则。
-    现在执行器是假的，这条规则的形状却是真的：**SQL 必须通过安全校验**。
-    将来执行器换成真的 PostgreSQL 查询时，这个节点、这条规则、
-    以及这条边上的所有测试，一行都不用改——变的只是注进去的那个函数。
+    它自己**不碰数据库**：不导入 sqlalchemy / asyncpg、不拿 engine、
+    也不做任何 SQL 解析或白名单判断。取数一律通过注入的执行器——
+    默认就是 query_execution.execute_real_query，而它只调用
+    app.services.safe_query.execute_safe_query。
+
+    为什么校验要通过两层？
+    - Agent 的 validate_sql 管工作流：挡住明显不合规的草稿、驱动 repair_sql；
+    - 数据服务的 validate_safe_select + 只读事务管数据库：独立于 Agent 存在。
+    本节点仍然是「校验通过才执行」这条规则的执行者——前置条件不满足时，
+    执行器一次都不会被调用。
     """
     if state.get("error"):
         return {}
@@ -369,32 +395,51 @@ def execute_query(
     if not sql_draft or not validation or not validation.get("passed"):
         return {
             "error": EXECUTION_BLOCKED_MESSAGE,
-            "events": ["execute_query：执行前置条件不满足，未执行模拟查询"],
+            "events": ["execute_query：执行前置条件不满足，未执行查询"],
         }
 
     intent = state.get("intent") or "unknown"
 
     try:
-        # sql 是要传的：它定义了「执行器接收 SQL」这个接口方向，
-        # 将来换成真实执行器时这里不用改（详见 mock_query.py 的说明）。
-        result = mock_executor(sql=sql_draft, intent=intent)
-    except Exception as exc:
-        # 只写异常类名。执行阶段的异常原文最容易带出连接串和密码，
-        # 一个字都不能进 State。
+        # 执行器的契约：吃 sql（+ 意图），还一份已经成形的 QueryResult。
+        # 真实执行器和 mock 执行器长得一样，所以这里不需要知道自己拿到的是哪个。
+        raw = await query_executor(sql=sql_draft, intent=intent)
+        # 契约为真不保证数据正确，但契约破了就一定有问题——不静默修正，
+        # 直接终止（例如 row_count 与明细长度对不上）
+        result = ensure_query_result_contract(raw)
+    except QueryResultContractError as exc:
         return {
-            "error": MOCK_EXECUTION_ERROR_MESSAGE,
-            "events": [f"execute_query：模拟查询执行失败（{type(exc).__name__}）"],
+            "error": CONTRACT_MESSAGE,
+            "events": [
+                QUERY_RESULT_CONTRACT_EVENT.format(category=type(exc).__name__)
+            ],
+        }
+    except Exception as exc:
+        # 只写异常的**类名**和安全文案。执行阶段的异常原文最容易带出
+        # 连接串、密钥和 SQL 片段，一个字都不能进 State。
+        #
+        # 这里不再进入 repair_sql：数据服务已经拒绝过的 SQL，
+        # 让模型再改一版只是浪费一次调用，而且改对了也未必符合数据服务的口径。
+        message, category = describe_execution_failure(exc)
+        return {
+            "error": message,
+            "events": [EXECUTION_FAILURE_EVENT.format(category=category)],
         }
 
-    row_count = result.get("row_count") or 0
+    row_count = result["row_count"]
+    source = result["source"]
 
     # 只写 query_result 和 events。
-    # 特别地：**不写 answer**。把结果翻译成中文结论是 explain_result 的活，
-    # 也不写 chart_suggestion——那是 suggest_visualization 的活。
-    # 一个节点只产出自己负责的那份数据，下游才有得可做。
+    # 特别地：**不写 answer**（那是 explain_result 的活）、
+    # **不写 chart_suggestion**（那是 suggest_visualization 的活）、
+    # **不动 retry_count**（那个额度只属于 repair_sql）。
     return {
         "query_result": result,
-        "events": [f"execute_query：模拟查询完成，返回 {row_count} 行结果"],
+        "events": [
+            QUERY_RESULT_EVENT.get(source, QUERY_RESULT_EVENT["postgres"]).format(
+                row_count=row_count
+            )
+        ],
     }
 
 

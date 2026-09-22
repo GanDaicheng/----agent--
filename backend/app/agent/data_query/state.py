@@ -55,10 +55,12 @@ class QueryResult(TypedDict):
     columns: list[str]  # 结果列名，图表节点用它判断横轴 / 纵轴 / 维度字段
     rows: list[dict[str, object]]  # 结果行，每行的键与 columns 对应
     row_count: int  # 行数，单独存一份，下游不必再算一遍 len(rows)
-    # 固定为 "mock"：明确告诉下游这不是真实数据库的结果。
-    # 用 Literal 而不是 bool，是因为将来接入真实查询时会有 "postgres" 之类的值，
-    # 字符串能直接扩展，而 True/False 表达不了第三种来源。
-    source: Literal["mock"]
+    # 数据来源。必须是明确的两个值之一：
+    # - "mock"     ：内置模拟数据，结论必须带模拟数据说明；
+    # - "postgres" ：数据中台安全查询服务返回的真实零售样例数据。
+    # 用 Literal 而不是 bool：字符串能直接扩展第三种来源，
+    # 而 True/False 既表达不了来源，也容易被误读成「成功/失败」。
+    source: Literal["mock", "postgres"]
 
 
 # 前端能渲染的图表类型。none 表示「这次不适合画图」，table 表示
