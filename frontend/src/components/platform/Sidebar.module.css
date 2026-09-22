@@ -1,0 +1,133 @@
+.sidebar {
+  position: sticky;
+  top: 0;
+  align-self: start;
+  max-height: 100vh;
+  overflow-y: auto;
+  padding: 20px 14px 28px;
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+}
+
+.overviewList,
+.moduleList {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.overviewLink {
+  display: block;
+  padding: 8px 10px;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text);
+  text-decoration: none;
+  border-radius: var(--radius-sm);
+}
+
+.group {
+  margin-top: 18px;
+}
+
+.groupHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0 10px 6px;
+}
+
+.groupTitle {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted);
+  letter-spacing: 0.06em;
+}
+
+.moduleLink {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  font-size: 14px;
+  color: var(--text);
+  text-decoration: none;
+  border-radius: var(--radius-sm);
+  border-left: 2px solid transparent;
+}
+
+.moduleName {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.overviewLink:hover,
+.moduleLink:hover {
+  background: var(--surface-muted);
+}
+
+.overviewLink[data-active="true"],
+.moduleLink[data-active="true"] {
+  color: var(--layer-business);
+  background: color-mix(in srgb, var(--layer-business) 8%, var(--surface));
+  border-left-color: var(--layer-business);
+  font-weight: 500;
+}
+
+.dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+}
+
+.dot[data-status="done"] {
+  background: var(--status-done);
+}
+
+.dot[data-status="building"] {
+  background: var(--status-building);
+}
+
+.dot[data-status="planned"] {
+  background: var(--status-planned);
+}
+
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.footnote {
+  margin: 22px 10px 0;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-muted);
+}
+
+@media (max-width: 900px) {
+  .sidebar {
+    position: static;
+    max-height: none;
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .sidebar[data-open="false"] {
+    display: none;
+  }
+}

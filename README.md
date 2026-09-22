@@ -299,6 +299,94 @@ docker compose down -v
 **注意它们只在 volume 首次创建时生效**：想改用户名或密码，必须先 `docker compose down -v`
 清空数据再启动，否则改不动。
 
+## 零售样例数据底座
+
+数据中台阶段的第 1 小步：把空的 PostgreSQL 容器变成**可真实执行零售分析 SQL 的样例数据底座**。
+
+### 五张表
+
+四张维度表 + 一张订单事实表：
+
+| 表 | 类型 | 主键 | 说明 |
+| --- | --- | --- | --- |
+| `customers` | 维度 | `customer_id` | 客户与会员等级（普通/银卡/金卡/黑金） |
+| `products` | 维度 | `product_id` | 商品、品类、单价（`Numeric(12,2)`，不用浮点） |
+| `regions` | 维度 | `region_id` | 区域，`region_name` 唯一 |
+| `date_dim` | 维度 | `date_id`（YYYYMMDD） | 覆盖 2025 全年 365 天，`full_date` 唯一 |
+| `orders` | 事实 | `order_id` | 订单明细，外键关联上面四张表 |
+
+`orders` 只存订单明细这一层的原始粒度，**不存任何聚合结果**——月度、区域、商品、会员的汇总
+全部由 SQL 现场算出来，这样数据中台才是「可真实分析」的。
+
+金额口径（数据库层用 CHECK 约束钉死）：
+
+```text
+gross_amount    = quantity × unit_price
+net_amount      = gross_amount - discount_amount
+discount_amount ≤ gross_amount
+```
+
+### 初始化与验证
+
+三个命令都在 `backend/` 目录下执行，且都会读取项目根 `.env` 里的 `DATABASE_URL`：
+
+```powershell
+cd backend
+
+# 1. 建表（迁移）
+python -m alembic upgrade head
+python -m alembic current
+
+# 2. 写入样例数据（幂等，可重复执行）
+python scripts/seed_retail_data.py
+
+# 3. 只读验证五类业务规律（不通过则退出码为 1）
+python scripts/verify_retail_data.py
+```
+
+### 样例数据规模
+
+| 表 | 行数 |
+| --- | --- |
+| `regions` | 4 |
+| `customers` | 240 |
+| `products` | 24（6 个品类） |
+| `date_dim` | 365（2025-01-01 ~ 2025-12-31） |
+| `orders` | 3404 |
+
+### 业务规律由生成规则产生
+
+样例数据不是随机数，也不是「生成后再手工改统计结果」：所有规律都来自
+`app/services/retail_seed.py` 里的权重参数，固定随机种子，两次执行结果完全一致。
+
+| 规律 | 产生方式 |
+| --- | --- |
+| 区域差异 | 区域权重 华东 0.38 > 华南 0.26 > 华北 0.20 > 华中 0.16 |
+| 季节性 | 月份权重 11 月 2.10、12 月 2.50，普通月份约 1.0 |
+| 热销商品 | `PRD005` / `PRD009` / `PRD013` 的抽样权重是普通商品的 8 倍 |
+| 会员复购 | 分层抽样：黑金 0.95 > 金卡 0.84 > 银卡 0.62 > 普通 0.40 |
+
+### 分析口径
+
+```text
+复购率 = 在统计周期内订单数 ≥ 2 的客户数 / 有订单的客户数
+客单价 = 总净销售额 / 去重订单数
+```
+
+### 幂等性
+
+`seed_retail_data.py` 写入时统一使用 `ON CONFLICT DO NOTHING`，且生成过程确定，
+因此**重复执行不会产生重复数据**，第二次执行的「本次新增」应全部为 0。
+
+### Alembic 与连接串
+
+`backend/alembic.ini` 里**不含任何连接串**（`sqlalchemy.url` 一项被注释掉），
+真实连接串只存在于项目根 `.env`，由 `backend/alembic/env.py` 在运行时通过
+`app.core.config.get_settings()` 读取。
+
+注意 `alembic.ini` 必须保持纯 ASCII：Alembic 会按操作系统区域编码读取该文件，
+在中文 Windows 上按 GBK 解析，写入中文注释会直接抛 `UnicodeDecodeError`。
+
 ## 本地启动前端
 
 前端是独立的 Next.js 工程，与后端分开启动。
@@ -355,7 +443,7 @@ npm run start    # 以生产模式启动，需先 build
 - [x] 阶段三·补：SQLAlchemy 异步引擎接入与数据库连接自检（`/health/db`）
 - [x] 阶段四：Next.js + TypeScript 前端工程初始化（占位首页）
 - [x] 阶段四·补：三服务容器化（后端/前端生产镜像 + Compose 健康依赖链 + 统一健康检查 `/api/v1/health`）
-- [ ] 阶段五：Alembic 初始化配置与零售样例数仓
+- [x] 阶段五：Alembic 初始化配置与零售样例数仓（五张表 + 幂等种子数据 + 只读验证脚本）
 - [ ] 阶段六：数据目录与指标语义层
 - [ ] 阶段七：安全 SQL 生成与查询执行
 - [ ] 阶段八：运行记录与可观测性

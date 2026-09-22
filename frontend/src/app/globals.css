@@ -1,22 +1,43 @@
+/*
+ * 全局设计令牌。
+ *
+ * 配色只服务一件事：让「业务 → 数据 → AI → 应用」这条分层链路一眼可辨。
+ * 分层色只在总览页作为主要视觉，其余页面仅用状态色与中性色。
+ */
 :root {
-  --bg: #f5f6f8;
+  /* 中性色 */
+  --bg: #f5f7fa;
   --surface: #ffffff;
-  --border: #e5e6eb;
-  --text: #1f2329;
-  --text-muted: #646a73;
-  --accent: #3370ff;
-  --radius: 12px;
-}
+  --surface-muted: #f8fafc;
+  --border: #e4e7ec;
+  --border-strong: #d0d5dd;
+  --text: #172033;
+  --text-muted: #667085;
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #17181c;
-    --surface: #1f2126;
-    --border: #2f3238;
-    --text: #e8eaed;
-    --text-muted: #9aa0a8;
-    --accent: #6b9bff;
-  }
+  /* 分层色 */
+  --layer-source: #475569;
+  --layer-business: #2563eb;
+  --layer-data: #15803d;
+  --layer-ai: #7c3aed;
+  --layer-app: #0f3d8c;
+
+  /* 建设状态色，与分层色区分开，避免状态被误读为层级 */
+  --status-done: #16a34a;
+  --status-building: #d97706;
+  --status-planned: #64748b;
+
+  --radius: 12px;
+  --radius-sm: 8px;
+  --shadow: 0 1px 2px rgba(16, 24, 40, 0.05);
+  --shadow-lift: 0 6px 16px rgba(16, 24, 40, 0.08);
+
+  --topbar-height: 60px;
+  --sidebar-width: 248px;
+
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI",
+    "Microsoft YaHei", "PingFang SC", "Noto Sans SC", "Hiragino Sans GB",
+    sans-serif;
+  --font-mono: "Cascadia Mono", Consolas, "Courier New", monospace;
 }
 
 * {
@@ -32,8 +53,46 @@ body {
 body {
   background: var(--bg);
   color: var(--text);
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei",
-    "PingFang SC", "Hiragino Sans GB", sans-serif;
+  font-family: var(--font-sans);
   line-height: 1.65;
   -webkit-font-smoothing: antialiased;
+}
+
+h1,
+h2,
+h3,
+h4 {
+  color: var(--text);
+  line-height: 1.35;
+}
+
+a {
+  color: var(--layer-business);
+}
+
+/* 键盘焦点必须清晰可见 */
+:focus-visible {
+  outline: 2px solid var(--layer-business);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* 跳转到主内容：仅键盘聚焦时出现 */
+.skipLink {
+  position: absolute;
+  left: 12px;
+  top: -48px;
+  z-index: 100;
+  padding: 8px 14px;
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  font-size: 14px;
+  text-decoration: none;
+  transition: top 0.15s ease;
+}
+
+.skipLink:focus {
+  top: 12px;
 }

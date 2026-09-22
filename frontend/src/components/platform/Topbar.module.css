@@ -1,0 +1,122 @@
+.topbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px 20px;
+  padding: 10px 20px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+
+.left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.brand {
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+}
+
+.divider {
+  width: 1px;
+  height: 18px;
+  background: var(--border-strong);
+}
+
+.current {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin: 0;
+  min-width: 0;
+  font-size: 13px;
+}
+
+.currentLabel {
+  color: var(--text-muted);
+}
+
+.currentValue {
+  color: var(--text);
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 20px;
+  margin: 0;
+  font-size: 12px;
+}
+
+.metaItem {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.metaItem dt {
+  color: var(--text-muted);
+}
+
+.metaItem dd {
+  margin: 0;
+  color: var(--text);
+  font-weight: 500;
+}
+
+.menuButton {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  font-size: 15px;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.menuButton:hover {
+  border-color: var(--text-muted);
+}
+
+/* 窄屏：主导航折叠为顶部按钮控制的下拉面板 */
+@media (max-width: 900px) {
+  .menuButton {
+    display: inline-flex;
+  }
+
+  .topbar {
+    padding: 10px 16px;
+  }
+
+  .divider {
+    display: none;
+  }
+}
+
+@media (max-width: 640px) {
+  .brand {
+    font-size: 14px;
+  }
+
+  .currentLabel {
+    display: none;
+  }
+
+  .meta {
+    width: 100%;
+  }
+}

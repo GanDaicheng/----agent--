@@ -1,0 +1,24 @@
+.note {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.tag {
+  flex: none;
+  padding: 1px 7px;
+  color: var(--status-planned);
+  background: color-mix(in srgb, var(--status-planned) 10%, var(--surface));
+  border: 1px dashed color-mix(in srgb, var(--status-planned) 40%, transparent);
+  border-radius: var(--radius-sm);
+  letter-spacing: 0.02em;
+}
+
+.hint {
+  color: var(--text-muted);
+  opacity: 0.85;
+}

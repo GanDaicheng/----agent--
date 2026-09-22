@@ -1,0 +1,138 @@
+.flow {
+  display: flex;
+  align-items: stretch;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.step {
+  display: flex;
+  align-items: center;
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  padding: 14px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-top: 3px solid var(--tone, var(--border-strong));
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+
+a.card {
+  text-decoration: none;
+  color: inherit;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+a.card:hover {
+  border-color: var(--tone);
+  border-top-color: var(--tone);
+  box-shadow: var(--shadow-lift);
+}
+
+.card[data-tone="source"] {
+  --tone: var(--layer-source);
+  background: var(--surface-muted);
+  border-style: dashed;
+}
+
+.card[data-tone="business"] {
+  --tone: var(--layer-business);
+}
+
+.card[data-tone="data"] {
+  --tone: var(--layer-data);
+}
+
+.card[data-tone="ai"] {
+  --tone: var(--layer-ai);
+}
+
+.card[data-tone="applications"] {
+  --tone: var(--layer-app);
+}
+
+.head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.name {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--tone, var(--text));
+}
+
+.sourceTag {
+  flex: none;
+  padding: 1px 7px;
+  font-size: 12px;
+  color: var(--layer-source);
+  background: color-mix(in srgb, var(--layer-source) 10%, var(--surface));
+  border-radius: 999px;
+}
+
+.duty {
+  flex: 1;
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-muted);
+}
+
+.entry {
+  font-size: 12px;
+  color: var(--tone);
+}
+
+.arrow {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  color: var(--border-strong);
+  font-size: 15px;
+}
+
+.arrow::before {
+  content: "→";
+}
+
+/* 窄屏：链路改为纵向，箭头方向随之改变 */
+@media (max-width: 900px) {
+  .flow {
+    flex-direction: column;
+  }
+
+  .step {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .card {
+    height: auto;
+  }
+
+  .arrow {
+    width: auto;
+    height: 26px;
+  }
+
+  .arrow::before {
+    content: "↓";
+  }
+}

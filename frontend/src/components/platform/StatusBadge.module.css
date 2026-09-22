@@ -1,0 +1,47 @@
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex: none;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+/* 状态点，让状态在色盲情况下也能靠形状区分 */
+.badge::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.badge[data-size="sm"] {
+  padding: 1px 8px;
+  font-size: 12px;
+}
+
+.badge[data-size="md"] {
+  padding: 3px 10px;
+  font-size: 13px;
+}
+
+.badge[data-status="done"] {
+  color: var(--status-done);
+  background: color-mix(in srgb, var(--status-done) 10%, var(--surface));
+  border-color: color-mix(in srgb, var(--status-done) 28%, transparent);
+}
+
+.badge[data-status="building"] {
+  color: var(--status-building);
+  background: color-mix(in srgb, var(--status-building) 10%, var(--surface));
+  border-color: color-mix(in srgb, var(--status-building) 30%, transparent);
+}
+
+.badge[data-status="planned"] {
+  color: var(--status-planned);
+  background: color-mix(in srgb, var(--status-planned) 10%, var(--surface));
+  border-color: color-mix(in srgb, var(--status-planned) 28%, transparent);
+}
