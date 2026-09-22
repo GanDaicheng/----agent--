@@ -1,0 +1,80 @@
+.main {
+  max-width: 1000px;
+  margin: 0 auto;
+  padding: 72px 24px 56px;
+}
+
+.header {
+  margin-bottom: 22px;
+}
+
+.title {
+  margin: 0 0 10px;
+  font-size: 34px;
+  letter-spacing: -0.5px;
+}
+
+.subtitle {
+  margin: 0;
+  font-size: 16px;
+  color: var(--text-muted);
+}
+
+.notice {
+  margin: 0 0 40px;
+  padding: 10px 14px;
+  font-size: 13px;
+  color: var(--text-muted);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: 6px;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 16px;
+}
+
+.card {
+  padding: 22px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  transition: border-color 0.15s ease, transform 0.15s ease;
+}
+
+.card:hover {
+  border-color: var(--accent);
+  transform: translateY(-2px);
+}
+
+.badge {
+  display: inline-block;
+  margin-bottom: 14px;
+  padding: 2px 8px;
+  font-size: 12px;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  border-radius: 999px;
+}
+
+.cardTitle {
+  margin: 0 0 8px;
+  font-size: 18px;
+}
+
+.cardDesc {
+  margin: 0;
+  font-size: 14px;
+  color: var(--text-muted);
+}
+
+.footer {
+  margin-top: 56px;
+  padding-top: 20px;
+  border-top: 1px solid var(--border);
+  font-size: 13px;
+  color: var(--text-muted);
+}

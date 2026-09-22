@@ -1,9 +1,9 @@
 from langchain.agents import create_agent
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
-from app.config import get_settings
-from app.llm import get_llm
-from app.tools import TOOLS
+from app.agent.prompts import SYSTEM_PROMPT
+from app.agent.tools import TOOLS
+from app.core.llm import get_llm
 
 _agent = None
 
@@ -15,7 +15,7 @@ def get_agent():
         _agent = create_agent(
             model=get_llm(),
             tools=TOOLS,
-            system_prompt=get_settings().system_prompt,
+            system_prompt=SYSTEM_PROMPT,
         )
     return _agent
 

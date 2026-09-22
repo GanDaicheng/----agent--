@@ -5,3 +5,9 @@ langgraph
 langchain-openai
 pydantic-settings
 tzdata
+
+# 数据库：异步 SQLAlchemy + asyncpg 驱动
+# alembic 本阶段只安装不使用，供后续迁移阶段直接使用
+sqlalchemy[asyncio]
+asyncpg
+alembic

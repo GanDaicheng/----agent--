@@ -1,0 +1,7 @@
+# 仅开发/测试环境使用。生产镜像只装项目根的 requirements.txt，
+# 不要把本文件装进去，否则会把测试工具带进容器。
+-r ../requirements.txt
+
+pytest>=8,<9
+# fastapi.testclient 依赖 httpx，测试必须显式声明，不能指望它作为传递依赖恰好存在
+httpx>=0.27,<1

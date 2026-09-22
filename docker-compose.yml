@@ -1,0 +1,106 @@
+# 本地开发用的三服务编排：PostgreSQL + FastAPI 后端 + Next.js 前端
+#
+# 一键启动（都必须在项目根目录执行）：
+#   docker compose up --build        前台启动，Ctrl+C 停止
+#   docker compose up --build -d     后台启动
+#   docker compose ps                查看三个服务的状态与健康情况
+#   docker compose logs -f backend   跟踪某个服务的日志（backend/postgres/frontend）
+#   docker compose down              停止并删除容器（数据保留）
+#   docker compose down -v           连数据卷一起删除，数据全部丢失，慎用
+#
+# 启动顺序不是「一起启动」，而是由健康检查串成一条链：
+#   postgres healthy → backend healthy → frontend healthy
+# 每一环都等前一环真的可用才继续，避免后端比数据库先起来而连接失败。
+#
+# 变量取值顺序：shell 环境变量 > 项目根的 .env > 本文件里的默认值。
+# 默认值是本地开发用的示例值，真实密码只应写在 .env 中。
+
+# 项目目录名含中文，Compose 会剥掉非 ASCII 字符从而推导出错误的名字（实测会变成 agent），
+# 因此这里显式指定。项目名会作为容器名和 volume 名的前缀。
+name: data-platform-agent
+
+services:
+  # backend 容器通过 Compose 服务名 postgres 直连数据库；
+  # 容器内部不能使用 localhost 访问 PostgreSQL。
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-data_platform}
+      POSTGRES_USER: ${POSTGRES_USER:-data_platform}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-data_platform_dev}
+    ports:
+      # 宿主机 5432 -> 容器 5432，本机用 localhost:5432 直连
+      - "5432:5432"
+    volumes:
+      # 具名 volume：容器删了数据还在，只有 down -v 才会清空
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      # pg_isready 返回 0 表示已能接受连接
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-data_platform} -d ${POSTGRES_DB:-data_platform}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      # 首次启动要跑 initdb，给足初始化时间，这段时间内的失败不计入 retries
+      start_period: 15s
+
+  backend:
+    build:
+      # 构建上下文仍是项目根目录：Dockerfile 里要 COPY 根目录的 requirements.txt
+      context: .
+      dockerfile: backend/Dockerfile
+    restart: unless-stopped
+    environment:
+      # 模型配置透传给容器。值来自根目录 .env，本文件只给缺省值。
+      # 留空也行：健康检查不碰模型，缺 key 不影响后端起不来。
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.deepseek.com/v1}
+      MODEL_NAME: ${MODEL_NAME:-deepseek-chat}
+      TEMPERATURE: ${TEMPERATURE:-0.0}
+      # 关键：容器内的数据库主机名必须是服务名 postgres。
+      # 用 DATABASE_URL_DOCKER（主机名 postgres），不能用 DATABASE_URL
+      # （主机名 localhost）——容器里的 localhost 指的是容器自己，不是宿主机。
+      DATABASE_URL: "${DATABASE_URL_DOCKER:-postgresql+asyncpg://data_platform:data_platform_dev@postgres:5432/data_platform}"
+    depends_on:
+      postgres:
+        # 等 postgres 健康检查真的通过，而不是只等容器「启动」
+        condition: service_healthy
+    ports:
+      # 宿主机 8000 -> 容器 8000
+      - "8000:8000"
+    healthcheck:
+      # 在容器内部请求自己的健康接口，只有接口返回 200 才算健康。
+      # 探活的是 /api/v1/health 而不是 /docs：前者会真的去 ping 数据库，
+      # 数据库断了它就返回 503，这个容器才会被判成不健康。
+      test: ["CMD", "python", "-c", "from urllib.request import urlopen; response = urlopen('http://127.0.0.1:8000/api/v1/health', timeout=3); assert response.status == 200"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      # 冷启动要 import langchain 那一堆，给它 20 秒不计失败
+      start_period: 20s
+
+  frontend:
+    build:
+      # 上下文同样是项目根目录：Dockerfile 里要 COPY frontend/ 下的源码和锁文件
+      context: .
+      dockerfile: frontend/Dockerfile
+    restart: unless-stopped
+    environment:
+      NEXT_TELEMETRY_DISABLED: "1"
+    depends_on:
+      backend:
+        # 后端健康之后前端才启动
+        condition: service_healthy
+    ports:
+      # 宿主机 3000 -> 容器 3000
+      - "3000:3000"
+    healthcheck:
+      # node:24 自带全局 fetch，不用额外装 curl
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000').then((response) => process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+
+volumes:
+  postgres_data:

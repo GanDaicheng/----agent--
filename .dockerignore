@@ -1,0 +1,48 @@
+# Docker 构建上下文排除清单。
+#
+# 这个文件只在 `docker build` 时生效，和 .gitignore 是两套独立规则：
+# .gitignore 管「哪些文件进 Git」，本文件管「哪些文件发给 Docker 守护进程」。
+# 两者都要有，因为前端镜像的构建上下文是项目根目录 —— 如果不排除，
+# node_modules（400+ MB）和 .venv（100+ MB）会被整包传给 Docker，构建变得极慢。
+#
+# 注意：被排除的文件在镜像里「不存在」，而非「存在但为空」。
+# 所以千万不要把构建需要的文件写进来。
+
+# --- Git 元数据：镜像里不需要版本历史 ---
+.git
+.gitignore
+
+# --- 敏感配置：绝不允许进入镜像层 ---
+# 镜像分层是可被任何人 `docker history` / 导出查看的，密钥一旦进去就等同于泄露。
+.env
+.env.*
+
+# --- 虚拟环境：容器内的依赖由 pip 重新安装，宿主机的不通用 ---
+.venv
+venv
+env
+
+# --- Python 缓存与构建产物 ---
+__pycache__
+*.py[cod]
+
+# --- 测试与检查缓存 ---
+.pytest_cache
+.mypy_cache
+.ruff_cache
+
+# --- Node / Next.js 依赖与构建产物：前端镜像里由 npm ci 重新安装 ---
+node_modules
+frontend/node_modules
+frontend/.next
+
+# --- 本机资料，构建用不到 ---
+*.docx
+docs
+
+# 以下文件必须保留在上下文中，不要加进本文件：
+#   requirements.txt          后端依赖清单，Dockerfile 要 COPY 它
+#   backend/app/              后端源码
+#   frontend/package.json     前端镜像构建要用
+#   frontend/package-lock.json
+#   frontend/src/             前端源码

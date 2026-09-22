@@ -6,7 +6,10 @@ from langchain_core.tools import tool
 
 @tool
 def get_current_time(timezone: str = "Asia/Shanghai") -> str:
-    """获取当前日期和时间。参数 timezone 为 IANA 时区名，默认 Asia/Shanghai。"""
+    """获取当前日期和时间。参数 timezone 为 IANA 时区名，默认 Asia/Shanghai。
+
+    Windows 不自带时区库，ZoneInfo 依赖 requirements.txt 中的 tzdata 包。
+    """
     try:
         now = datetime.now(ZoneInfo(timezone))
     except Exception:

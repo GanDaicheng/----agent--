@@ -1,43 +1,31 @@
-from pathlib import Path
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
-from pydantic import BaseModel, Field
+from fastapi import FastAPI
 
-from app.agent import run_agent
+from app.api.routes import router
+from app.core.logging import configure_logging
+from app.repositories.database import dispose_engine
 
-FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"
-
-app = FastAPI(title="数据中台 Agent")
-
-
-class Message(BaseModel):
-    role: str
-    content: str
+configure_logging()
 
 
-class ChatRequest(BaseModel):
-    messages: list[Message] = Field(min_length=1)
+@asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    """应用生命周期：启动时什么都不用做，退出时释放数据库连接池。
+
+    必须显式关闭，否则 --reload 反复重启会遗留一批没归还的连接，
+    数据库端的连接数会慢慢涨上去。
+    """
+    yield
+    await dispose_engine()
 
 
-class ChatResponse(BaseModel):
-    reply: str
+app = FastAPI(
+    title="数据中台 Agent",
+    description="零售数据中台智能问数工作台后端服务",
+    version="0.1.0",
+    lifespan=lifespan,
+)
 
-
-@app.get("/")
-def index() -> FileResponse:
-    return FileResponse(FRONTEND_DIR / "index.html")
-
-
-@app.post("/chat", response_model=ChatResponse)
-def chat(req: ChatRequest) -> ChatResponse:
-    try:
-        reply = run_agent([m.model_dump() for m in req.messages])
-    except RuntimeError as exc:
-        # 配置类错误（如缺 key）直接告诉调用方原因
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"模型调用失败：{exc}") from exc
-    return ChatResponse(reply=reply)
+app.include_router(router)
