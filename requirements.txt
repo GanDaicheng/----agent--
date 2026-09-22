@@ -6,6 +6,9 @@ langchain-openai
 pydantic-settings
 tzdata
 
+# SQL 安全校验：把 SQL 解析成 AST 再逐条检查，不用字符串匹配猜安全性
+sqlglot
+
 # 数据库：异步 SQLAlchemy + asyncpg 驱动
 # alembic 本阶段只安装不使用，供后续迁移阶段直接使用
 sqlalchemy[asyncio]
