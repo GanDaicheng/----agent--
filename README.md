@@ -591,6 +591,189 @@ Agent 的 `validate_sql` 要求每个字段都带表名，因此 `ORDER BY <输�
 本阶段按边界要求没有修改 Agent 的校验器，这条差异有专门的测试记录在案
 （`test_agent_validator_still_rejects_an_order_by_alias`）。
 
+## 智能问数接口（自然语言）
+
+第 4 小步：给前端提供自然语言问数入口。
+
+```text
+POST /api/v1/agent/data-query     ← 自然语言，给前端用
+POST /api/v1/data/query           ← 受控 SQL，给程序化调用方用
+```
+
+两者不是一回事：前者只收一句自然语言问题，SQL 的生成与校验全在 Agent 内部；
+后者直接收 SQL，由数据服务做白名单校验。
+
+### 完整链路
+
+```text
+浏览器 / 未来的 Next.js 页面
+→ FastAPI 路由（只做 HTTP 适配）
+→ await get_data_query_graph().ainvoke({"question": ...})
+→ LangGraph Agent（意图 → 资产 → 生成 SQL → 校验 → 执行 → 解释 → 图表）
+→ 数据中台 execute_safe_query()
+→ PostgreSQL 真实零售样例数据
+→ 路由筛选出安全字段
+→ JSON 响应
+```
+
+### 请求与响应
+
+请求：
+
+```json
+{ "question": "华东地区近六个月销售额趋势怎么样？" }
+```
+
+成功响应（HTTP 200）：
+
+```json
+{
+  "status": "ok",
+  "answer": "销售额整体呈上升趋势……",
+  "query_result": {
+    "columns": ["month", "sales_amount"],
+    "rows": [{ "month": 1, "sales_amount": 140892.02 }],
+    "row_count": 12,
+    "source": "postgres"
+  },
+  "chart_suggestion": {
+    "chart_type": "line",
+    "title": "销售额趋势",
+    "x_field": "month",
+    "y_field": "sales_amount",
+    "series_field": null,
+    "value_format": "currency",
+    "reason": "结果包含时间维度和销售额。"
+  },
+  "events": ["已接收问题", "已识别问题类型", "已匹配可用数据资产"]
+}
+```
+
+### 状态码
+
+| 场景 | HTTP | status |
+| --- | ---: | --- |
+| Agent 正常完成（含未知意图、无匹配资产、查询 0 行） | 200 | `ok` |
+| Agent 写入受控 `error`（意图识别失败、数据服务不可用等） | 200 | `error` |
+| 请求体不合法（缺 `question`、纯空白、超 500 字） | 422 | — |
+| 图执行抛异常 / 结果契约不合法 | 500 | — |
+
+**`error` 也是 200**：那是一个安全的、可以展示给用户的业务结果，不是 HTTP 层故障。
+只有「服务本身给不出任何回答」才是 500。
+
+### 不返回什么
+
+路由采用**白名单式**取字段，只读 `answer` / `query_result` / `chart_suggestion` / `events`。
+Agent State 里的这些一律不外发：
+
+| 字段 | 不外发的原因 |
+| --- | --- |
+| `sql_draft` | SQL 原文含表名字段名，属于实现细节 |
+| `sql_validation` | 校验问题原文同上 |
+| `matched_assets` | 内部资产目录结构 |
+| `retry_count` | 内部重试计数 |
+| `intent` | 内部意图枚举 |
+| `error` | 内部错误字段；它的安全文案已并入 `answer` |
+| `question` | 用户原始输入 |
+
+### events 为什么要重新映射
+
+Agent 内部事件形如 `"节点名：细节"`，细节里可能带用户问题全文、SQL 片段、
+字段名甚至异常类名——**不能假设它适合公开**。所以路由不复制原文，
+只按节点名查一张固定映射表：
+
+```text
+intake → 已接收问题        execute_query → 已完成数据查询
+understand_question → 已识别问题类型    explain_result → 已生成分析结论
+discover_assets → 已匹配可用数据资产    suggest_visualization → 已生成图表建议
+generate_sql → 已生成查询方案           finish → 分析流程已完成
+validate_sql → 已完成查询安全校验       repair_sql → 已尝试修复查询方案
+```
+
+未知前缀直接丢弃；保持原顺序；同一步骤重复出现（例如修复后再次校验）照原样保留。
+
+### 手动验证（会花一次模型调用，请自行决定）
+
+自动化测试**不调用真实 LLM**。想验证整条真实链路时：
+
+1. 打开 http://localhost:8000/docs
+2. 找到 `POST /api/v1/agent/data-query`，点 **Try it out**
+3. 输入 `{"question":"华东地区近六个月销售额趋势怎么样？"}`
+4. 点 **Execute**
+
+预期：HTTP 200、`status = ok`、`query_result.source = postgres`、
+`chart_suggestion.chart_type = line`、`answer` 里没有「模拟数据」说明，
+`events` 是上面那串简短流程文案。
+
+如果模型配置不可用，会返回 `status = error` 加一句受控说明，
+不会泄露配置内容。
+
+## 智能问数页面
+
+页面上线后可访问：
+
+```text
+http://localhost:3000/applications/data-query
+```
+
+输入一句中文问题，页面会调用 `POST /api/v1/agent/data-query`，展示分析结论、
+执行过程、明细表和图表建议。
+
+### 跨端启动（必须前后端同时在跑）
+
+页面要拿到数据，两个服务都得在：
+
+```powershell
+# 1. 数据库 + 后端 + 前端
+docker compose up -d
+
+# 2. 确认三端都能访问
+http://localhost:3000/applications/data-query   前端页面
+http://localhost:8000/docs                      后端接口文档
+http://localhost:8000/api/v1/health             后端与数据库状态
+```
+
+### 为什么需要 CORS
+
+前端在 `localhost:3000`、后端在 `localhost:8000`，**端口不同就是跨域**。
+浏览器会在真正发请求之前先发一个 `OPTIONS` 预检，后端不明确放行就会整个被拦掉，
+页面连一个字节的响应都拿不到。
+
+后端只放行本地开发的两个来源：
+
+```text
+http://localhost:3000
+http://127.0.0.1:3000
+```
+
+刻意**不用 `["*"]`**（通配符等于允许任意站点带着浏览器里的凭据调用本服务），
+方法只开 `GET/POST/OPTIONS`，请求头只开 `Content-Type`，且不开
+`allow_credentials`。这份名单是本地开发用的，生产环境应由部署配置或
+受控的允许列表管理。
+
+### 前端如何定位后端
+
+前端不写死 IP，而是拿当前页面的协议和主机名拼上 8000 端口：
+
+```text
+在 http://localhost:3000   打开 → 请求 http://localhost:8000/api/v1/agent/data-query
+在 http://127.0.0.1:3000   打开 → 请求 http://127.0.0.1:8000/api/v1/agent/data-query
+```
+
+这样既不会把某台机器的 IP 固化进代码，也顺带满足了上面的 CORS 白名单
+（按来源逐个列出，写死 IP 反而会被拦）。
+
+### 页面边界
+
+```text
+当前使用本地零售样例数据，不是企业真实生产数据
+每次提问都会调用配置的模型服务，请不要输入敏感信息
+尚未接入 RAG 知识库、用户权限与会话记忆
+```
+
+页面首次打开**不会**发起任何请求；只有点击「开始分析」或按
+`Ctrl / Cmd + Enter` 才会提交。请求可以取消，取消、失败、空结果各有独立展示。
+
 ## 本地启动前端
 
 前端是独立的 Next.js 工程，与后端分开启动。
@@ -650,7 +833,8 @@ npm run start    # 以生产模式启动，需先 build
 - [x] 阶段五：Alembic 初始化配置与零售样例数仓（五张表 + 幂等种子数据 + 只读验证脚本）
 - [x] 阶段五·补：数据服务受控只读查询接口（AST 安全校验 + 只读事务 + 结构化结果，POST `/api/v1/data/query`）
 - [x] 阶段五·补：智能问数 Agent 接入真实数据（默认执行器改为数据中台服务，mock 保留供测试）
+- [x] 阶段五·补：自然语言智能问数接口（POST `/api/v1/agent/data-query`，await 生产 Agent 图）
+- [x] 阶段九：前端问数工作台（`/applications/data-query`：输入、加载、取消、结论、执行过程、明细表、SVG/CSS 图表）
 - [ ] 阶段六：数据目录与指标语义层
 - [ ] 阶段七：安全 SQL 生成与查询执行
 - [ ] 阶段八：运行记录与可观测性
-- [ ] 阶段九：前端问数工作台（图表与交互）

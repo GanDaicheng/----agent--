@@ -1,0 +1,623 @@
+/*
+ * 智能问数工作台的样式。
+ *
+ * 沿用全局设计令牌（globals.css），只在局部用 AI 中台的紫色作为强调色——
+ * 这个页面属于智能应用层，但背后的能力来自 AI 中台。
+ *
+ * 状态一律「颜色 + 文字」双重表达：色盲用户和黑白打印下也必须分得清
+ * 「出错」「已取消」「没有数据」。
+ */
+
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+
+  /* 本地语义色。全局令牌里没有「危险 / 成功」这两组，
+     因为它们只在少数页面用到，不值得污染全局。 */
+  --dq-accent: var(--layer-ai);
+  --dq-accent-soft: #f5f3ff;
+  --dq-danger: #b42318;
+  --dq-danger-soft: #fef3f2;
+  --dq-danger-border: #fda29b;
+  --dq-neutral-soft: #f1f5f9;
+}
+
+/* ------------------------------- 页头 ------------------------------- */
+
+.breadcrumb {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 16px;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.breadcrumb a {
+  color: var(--text-muted);
+  text-decoration: none;
+}
+
+.breadcrumb a:hover {
+  color: var(--dq-accent);
+  text-decoration: underline;
+}
+
+.sep {
+  color: var(--border-strong);
+}
+
+.header {
+  padding-bottom: 18px;
+  border-bottom: 1px solid var(--border);
+}
+
+.titleRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+
+.title {
+  margin: 0;
+  font-size: 26px;
+  letter-spacing: -0.3px;
+}
+
+.subtitle {
+  margin: 10px 0 0;
+  max-width: 68ch;
+  font-size: 15px;
+  color: var(--text-muted);
+}
+
+/* 边界说明必须醒目：用户输入的内容会被送到模型服务 */
+.boundary {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  margin-top: 16px;
+  padding: 12px 14px;
+  background: var(--dq-accent-soft);
+  border: 1px solid #ddd6fe;
+  border-left: 3px solid var(--dq-accent);
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--text);
+}
+
+.boundaryTag {
+  flex: none;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--dq-accent);
+  color: #ffffff;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+/* ------------------------------- 卡片 ------------------------------- */
+
+.card {
+  padding: 18px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+
+.cardTitle {
+  margin: 0 0 4px;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.cardCaption {
+  margin: 0 0 14px;
+  font-size: 12.5px;
+  color: var(--text-muted);
+}
+
+/* ------------------------------- 输入区 ------------------------------- */
+
+.textarea {
+  width: 100%;
+  min-height: 96px;
+  padding: 12px 14px;
+  font-family: inherit;
+  font-size: 14px;
+  line-height: 1.7;
+  color: var(--text);
+  background: var(--surface-muted);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  resize: vertical;
+}
+
+.textarea:focus {
+  outline: 2px solid var(--dq-accent);
+  outline-offset: 1px;
+  background: var(--surface);
+}
+
+.textarea:disabled {
+  background: var(--dq-neutral-soft);
+  color: var(--text-muted);
+  cursor: not-allowed;
+}
+
+.inputMeta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 8px;
+  font-size: 12.5px;
+  color: var(--text-muted);
+}
+
+.counter[data-over="true"] {
+  color: var(--dq-danger);
+  font-weight: 600;
+}
+
+.validation {
+  margin: 8px 0 0;
+  font-size: 13px;
+  color: var(--dq-danger);
+}
+
+.hint {
+  font-size: 12.5px;
+  color: var(--text-muted);
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 9px 18px;
+  font-family: inherit;
+  font-size: 14px;
+  border-radius: var(--radius-sm);
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.button:focus-visible {
+  outline: 2px solid var(--dq-accent);
+  outline-offset: 2px;
+}
+
+.primary {
+  background: var(--dq-accent);
+  color: #ffffff;
+}
+
+.primary:hover:not(:disabled) {
+  background: #6d28d9;
+}
+
+.primary:disabled {
+  background: #c4b5fd;
+  cursor: not-allowed;
+}
+
+.secondary {
+  background: var(--surface);
+  color: var(--text);
+  border-color: var(--border-strong);
+}
+
+.secondary:hover:not(:disabled) {
+  border-color: var(--dq-accent);
+  color: var(--dq-accent);
+}
+
+.secondary:disabled {
+  color: var(--text-muted);
+  cursor: not-allowed;
+}
+
+.examples {
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px dashed var(--border);
+}
+
+.examplesLabel {
+  margin: 0 0 10px;
+  font-size: 12.5px;
+  color: var(--text-muted);
+}
+
+.exampleList {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.example {
+  padding: 6px 12px;
+  font-family: inherit;
+  font-size: 13px;
+  color: var(--text);
+  background: var(--surface-muted);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  cursor: pointer;
+  text-align: left;
+}
+
+.example:hover:not(:disabled) {
+  border-color: var(--dq-accent);
+  color: var(--dq-accent);
+}
+
+.example:disabled {
+  color: var(--text-muted);
+  cursor: not-allowed;
+}
+
+/* ------------------------------- 加载中 ------------------------------- */
+
+.loadingCard {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.loadingHead {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.spinner {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  border: 2px solid #ddd6fe;
+  border-top-color: var(--dq-accent);
+  border-radius: 50%;
+  animation: spin 0.9s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* 只说明「正在进行」，不标记任何一步已完成——进度是假的就不该画 */
+.loadingSteps {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding-left: 26px;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.loadingSteps li::marker {
+  color: var(--dq-accent);
+}
+
+.loadingNote {
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--text-muted);
+}
+
+/* ------------------------------- 状态提示 ------------------------------- */
+
+.notice {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 14px 16px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  font-size: 14px;
+  line-height: 1.7;
+}
+
+.noticeTag {
+  flex: none;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  color: #ffffff;
+  background: var(--text-muted);
+}
+
+.notice[data-tone="error"] {
+  background: var(--dq-danger-soft);
+  border-color: var(--dq-danger-border);
+  color: var(--dq-danger);
+}
+
+.notice[data-tone="error"] .noticeTag {
+  background: var(--dq-danger);
+}
+
+/* 取消是正常操作，不是错误：用中性色而不是红色 */
+.notice[data-tone="cancelled"] {
+  background: var(--dq-neutral-soft);
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+
+.notice[data-tone="empty"] {
+  background: var(--surface-muted);
+  border-color: var(--border);
+  color: var(--text-muted);
+}
+
+/* ------------------------------- 结论 ------------------------------- */
+
+.answer {
+  margin: 0;
+  font-size: 15px;
+  line-height: 1.85;
+
+  /* 保留模型输出里的自然换行；文字按纯文本渲染，绝不当作 HTML */
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.answerError {
+  color: var(--dq-danger);
+}
+
+/* ------------------------------- 执行过程 ------------------------------- */
+
+.timeline {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  counter-reset: step;
+}
+
+.timelineItem {
+  position: relative;
+  padding: 6px 0 6px 26px;
+  font-size: 13.5px;
+  color: var(--text);
+}
+
+.timelineItem::before {
+  content: "";
+  position: absolute;
+  left: 5px;
+  top: 15px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--dq-accent);
+}
+
+.timelineItem:not(:last-child)::after {
+  content: "";
+  position: absolute;
+  left: 8px;
+  top: 24px;
+  bottom: -3px;
+  width: 1px;
+  background: var(--border-strong);
+}
+
+/* ------------------------------- 表格 ------------------------------- */
+
+.tableMeta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  margin-bottom: 12px;
+  font-size: 12.5px;
+  color: var(--text-muted);
+}
+
+.sourceTag {
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  border: 1px solid var(--border-strong);
+  background: var(--surface-muted);
+  color: var(--text-muted);
+}
+
+/* 模拟数据必须明确标注，不能让它看起来像真实数据 */
+.sourceTag[data-source="mock"] {
+  background: #fffaeb;
+  border-color: #fec84b;
+  color: #b54708;
+}
+
+.sourceTag[data-source="postgres"] {
+  background: #ecfdf3;
+  border-color: #a6f4c5;
+  color: #027a48;
+}
+
+.tableWrap {
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  max-height: 420px;
+  overflow-y: auto;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.table th,
+.table td {
+  padding: 8px 12px;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+}
+
+.table th {
+  position: sticky;
+  top: 0;
+  background: var(--surface-muted);
+  font-weight: 600;
+  color: var(--text-muted);
+  z-index: 1;
+}
+
+.table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.numeric {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ------------------------------- 图表 ------------------------------- */
+
+.chartTitle {
+  margin: 0 0 4px;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.chartReason {
+  margin: 0 0 14px;
+  font-size: 12.5px;
+  color: var(--text-muted);
+}
+
+.svgChart {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.axisLine {
+  stroke: var(--border-strong);
+  stroke-width: 1;
+}
+
+.gridLine {
+  stroke: var(--border);
+  stroke-width: 1;
+  stroke-dasharray: 3 4;
+}
+
+.axisText {
+  fill: var(--text-muted);
+  font-size: 11px;
+}
+
+.linePath {
+  fill: none;
+  stroke: var(--dq-accent);
+  stroke-width: 2;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+
+.linePoint {
+  fill: var(--dq-accent);
+}
+
+.barList {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.barRow {
+  display: grid;
+  grid-template-columns: minmax(72px, 168px) 1fr auto;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+}
+
+.barLabel {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+}
+
+.barTrack {
+  height: 14px;
+  background: var(--surface-muted);
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.barFill {
+  display: block;
+  height: 100%;
+  background: var(--dq-accent);
+  border-radius: 999px;
+}
+
+.barValue {
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+/* ------------------------------- 响应式 ------------------------------- */
+
+@media (max-width: 720px) {
+  .barRow {
+    grid-template-columns: 1fr;
+    gap: 4px;
+  }
+
+  .barValue {
+    text-align: right;
+  }
+}
+
+/* 尊重系统的「减少动态效果」设置 */
+@media (prefers-reduced-motion: reduce) {
+  .spinner {
+    animation: none;
+    border-top-color: var(--dq-accent);
+    opacity: 0.7;
+  }
+
+  .button {
+    transition: none;
+  }
+}

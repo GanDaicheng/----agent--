@@ -1,8 +1,23 @@
+import logging
+from collections.abc import Mapping
 from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError, field_validator
 
+from app.agent.data_query.constants import (
+    NODE_DISCOVER_ASSETS,
+    NODE_EXECUTE_QUERY,
+    NODE_EXPLAIN_RESULT,
+    NODE_FINISH,
+    NODE_GENERATE_SQL,
+    NODE_INTAKE,
+    NODE_REPAIR_SQL,
+    NODE_SUGGEST_VISUALIZATION,
+    NODE_UNDERSTAND_QUESTION,
+    NODE_VALIDATE_SQL,
+)
+from app.agent.data_query.graph import get_data_query_graph
 from app.agent.graph import run_agent
 from app.core.exceptions import ConfigurationError
 from app.services.database_health import check_database
@@ -15,6 +30,8 @@ from app.services.safe_query import (
     UnsafeSqlError,
     execute_safe_query,
 )
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -81,6 +98,156 @@ class SafeQueryErrorResponse(BaseModel):
 
     message: str
     issues: list[str] = Field(default_factory=list)
+
+
+# --------------------------------------------------------------------------
+# 智能问数（自然语言）接口的模型与安全映射
+# --------------------------------------------------------------------------
+
+AGENT_QUESTION_MAX_LENGTH = 500
+
+# 路由级失败的统一文案。图构建失败、图执行抛异常、结果契约不合法，
+# 对外都是这一句——具体原因只进服务端日志。
+AGENT_UNAVAILABLE_DETAIL = "智能问数服务暂时不可用，请稍后重试。"
+
+# Agent 出错时的兜底回答。
+# 为什么需要它？因为 finish 的错误分支**只补一条事件、不写 answer**，
+# 所以正常接线下的错误终态其实没有 answer。而接口契约要求 answer 始终存在。
+# 这时优先复用 Agent 自己写好的安全错误说明（state["error"] 全是固定文案），
+# 实在没有才用这句兜底。
+AGENT_ERROR_FALLBACK_ANSWER = "智能问数未能完成，请稍后重试。"
+
+# 内部事件 → 前端公开文案。键用 constants 里的节点名常量，不手抄字符串：
+# 哪天有人改了节点名，对应关系会在这里立刻失配（而不是悄悄映射不到、事件消失）。
+PUBLIC_EVENT_TEXT: dict[str, str] = {
+    NODE_INTAKE: "已接收问题",
+    NODE_UNDERSTAND_QUESTION: "已识别问题类型",
+    NODE_DISCOVER_ASSETS: "已匹配可用数据资产",
+    NODE_GENERATE_SQL: "已生成查询方案",
+    NODE_VALIDATE_SQL: "已完成查询安全校验",
+    NODE_REPAIR_SQL: "已尝试修复查询方案",
+    NODE_EXECUTE_QUERY: "已完成数据查询",
+    NODE_EXPLAIN_RESULT: "已生成分析结论",
+    NODE_SUGGEST_VISUALIZATION: "已生成图表建议",
+    NODE_FINISH: "分析流程已完成",
+}
+
+# 内部事件的形状是「节点名：细节」，分隔符就是中文冒号
+EVENT_SEPARATOR = "："
+
+
+def to_public_agent_events(events: object) -> list[str]:
+    """把 Agent 内部事件映射成可以安全外发的固定文案。
+
+    内部事件的细节部分不可信：里面可能有用户问题全文、SQL 片段、表名字段名，
+    甚至异常类名。前端要的只是「流程走到哪一步了」，
+    所以这里**只按节点名查表**，一个字符都不从原文复制。
+
+    三条规则：
+    - 只认「节点名：细节」这个形状，且节点名在映射表里；缺分隔符、前缀不认识
+      一律丢弃（不猜、不兜底输出原文）；
+    - 保持原有顺序，同一步骤重复出现也照原样保留（例如修复后再次校验）；
+    - 非字符串一律跳过。
+    """
+    if not isinstance(events, list):
+        return []
+
+    public: list[str] = []
+    for event in events:
+        if not isinstance(event, str):
+            continue
+        node, separator, _detail = event.partition(EVENT_SEPARATOR)
+        if not separator:
+            # 不符合内部事件的固定形状，不能当成已知节点处理
+            continue
+        text = PUBLIC_EVENT_TEXT.get(node.strip())
+        if text is not None:
+            public.append(text)
+    return public
+
+
+class AgentDataQueryRequest(BaseModel):
+    """自然语言问数请求。
+
+    只收 question。SQL、intent、sql_draft、query_result、retry_count 这些
+    Agent 内部状态**不在模型里**，因此客户端无从注入——
+    请求体能影响的只有「问什么」这一个字段。
+
+    同样是本地开发原型：没有身份认证，也没有按用户的配额。
+    """
+
+    question: str = Field(
+        min_length=1,
+        max_length=AGENT_QUESTION_MAX_LENGTH,
+        description="用户的自然语言数据分析问题。",
+    )
+
+    @field_validator("question", mode="after")
+    @classmethod
+    def _strip_question(cls, value: str) -> str:
+        """去掉首尾空白；纯空白视为非法输入。
+
+        为什么放在校验器里而不是在路由里 strip？因为「纯空白」必须在
+        进入业务逻辑**之前**就被挡掉，否则会一路走到 Agent 再失败，
+        白白花掉一次模型调用。放在这里，它就是一个 422。
+        """
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("问题不能为空白。")
+        return stripped
+
+
+class AgentQueryResultResponse(BaseModel):
+    """Agent 查询结果里允许公开的部分。
+
+    注意没有 sql、没有执行耗时、没有连接信息——那些都在 Agent 和数据服务内部。
+    source 保留 "mock" 是为了兼容测试与将来的显式演示模式；
+    当前生产图只会返回 "postgres"。
+    """
+
+    columns: list[str]
+    rows: list[dict[str, object]]
+    row_count: int
+    source: Literal["postgres", "mock"]
+
+
+class AgentChartSuggestionResponse(BaseModel):
+    """图表建议。七个字段全部必填——前端按固定下标取值，不做存在性判断。"""
+
+    chart_type: Literal["line", "bar", "table", "none"]
+    title: str
+    x_field: str | None
+    y_field: str | None
+    series_field: str | None
+    value_format: Literal["currency", "number", "percent"] | None
+    reason: str
+
+
+class AgentDataQueryResponse(BaseModel):
+    """智能问数的对外响应。
+
+    status 的两种取值对应两类完全不同的处境：
+    - "ok"    ：Agent 正常跑完。**包括**未知意图、没有匹配资产、
+                SQL 修复后仍不合规、查询 0 行这些业务结果——
+                它们是 Agent 已经安全处理过的答案，不是服务故障。
+    - "error" ：Agent 内部写了受控 error（意图识别失败、数据服务不可用等）。
+
+    两种都是 HTTP 200：能给出一个安全、完整的回答，就说明服务本身是好的。
+    """
+
+    status: Literal["ok", "error"]
+    answer: str
+    query_result: AgentQueryResultResponse | None
+    chart_suggestion: AgentChartSuggestionResponse | None
+    events: list[str]
+
+
+class AgentResponseContractError(Exception):
+    """Agent 返回的 State 不符合公开契约。
+
+    单独一个异常类型，是为了和「图执行失败」区分开：
+    结果形状不对是我们自己的缺陷，必须显式失败，绝不静默修正后放行。
+    """
 
 
 @router.get("/")
@@ -209,3 +376,140 @@ async def data_query(req: SafeQueryRequest) -> SafeQueryResponse:
         row_count=result.row_count,
         source="postgres",
     )
+
+
+def _to_query_result(raw: object) -> AgentQueryResultResponse | None:
+    """把 State 里的 query_result 转成公开模型。
+
+    两道检查，缺一不可：
+    1. 形状（字段齐不齐、source 是否合法）交给 Pydantic；
+    2. `row_count == len(rows)` 必须自己判——Pydantic 不会替我们比这个。
+
+    对不上就是**失败**，不是「顺手改成 len(rows)」。行数和明细不一致说明
+    产出方有 bug，静默补齐只会把问题推到前端更难排查的地方。
+    """
+    if raw is None:
+        return None
+
+    if not isinstance(raw, Mapping):
+        raise AgentResponseContractError("query_result 不是键值结构。")
+
+    try:
+        result = AgentQueryResultResponse.model_validate(dict(raw))
+    except ValidationError as exc:
+        raise AgentResponseContractError("query_result 字段不符合契约。") from exc
+
+    if result.row_count != len(result.rows):
+        raise AgentResponseContractError("query_result 的 row_count 与 rows 长度不一致。")
+
+    return result
+
+
+def _to_chart_suggestion(raw: object) -> AgentChartSuggestionResponse | None:
+    """图表建议必须七个字段齐全。缺字段就失败，不补默认值。"""
+    if raw is None:
+        return None
+
+    if not isinstance(raw, Mapping):
+        raise AgentResponseContractError("chart_suggestion 不是键值结构。")
+
+    try:
+        return AgentChartSuggestionResponse.model_validate(dict(raw))
+    except ValidationError as exc:
+        raise AgentResponseContractError("chart_suggestion 字段不符合契约。") from exc
+
+
+def build_agent_response(state: object) -> AgentDataQueryResponse:
+    """把 Agent 的 State 筛成可以安全外发的响应。
+
+    这是个**纯函数**：不碰数据库、不调模型、不读配置，
+    因此可以脱离 HTTP 直接单测各种畸形 State。
+
+    这里做的是「白名单式」的字段挑选——只取 answer / query_result /
+    chart_suggestion / events 四项，逐项转换；State 里其余的键
+    （sql_draft、sql_validation、matched_assets、retry_count、intent、
+    error、question）根本不会被读出来，也就没有「忘记过滤」的风险。
+    """
+    if not isinstance(state, Mapping):
+        raise AgentResponseContractError("Agent 返回的 State 不是键值结构。")
+
+    error = state.get("error")
+    answered = state.get("answer")
+
+    if not isinstance(answered, str) or not answered.strip():
+        # Agent 出错时不会写 answer（finish 的错误分支只补事件），
+        # 所以这里退回它自己生成的安全错误说明。
+        if isinstance(error, str) and error.strip():
+            answered = error
+        else:
+            answered = AGENT_ERROR_FALLBACK_ANSWER
+
+    events = to_public_agent_events(state.get("events"))
+
+    if error:
+        # 受控失败：不返回可能残留的 query_result / chart_suggestion。
+        # 出错时它们要么不存在，要么是上一次尝试的中间产物，一律不外发。
+        return AgentDataQueryResponse(
+            status="error",
+            answer=answered,
+            query_result=None,
+            chart_suggestion=None,
+            events=events,
+        )
+
+    return AgentDataQueryResponse(
+        status="ok",
+        answer=answered,
+        query_result=_to_query_result(state.get("query_result")),
+        chart_suggestion=_to_chart_suggestion(state.get("chart_suggestion")),
+        events=events,
+    )
+
+
+@router.post(
+    "/api/v1/agent/data-query",
+    response_model=AgentDataQueryResponse,
+    responses={
+        500: {"description": AGENT_UNAVAILABLE_DETAIL},
+    },
+)
+async def agent_data_query(req: AgentDataQueryRequest) -> AgentDataQueryResponse:
+    """自然语言智能问数。
+
+    路由只做四件事：接参数、取生产图、await 图执行、把 State 筛成安全响应。
+    它**不**理解业务问题、不生成或校验 SQL、不查数据库、不解释结果、不建议图表——
+    那些全部在 LangGraph Agent 和数据中台服务里，路由重复一遍只会多出一份会走样的副本。
+
+    三点必须守住的约定：
+
+    1. 用 `await graph.ainvoke(...)`。生产图里 execute_query 是异步节点
+       （它要 await 数据服务），LangGraph 对含异步节点的图**拒绝**同步 invoke；
+       而且本函数运行在 FastAPI 的事件循环里，绝不能再套 asyncio.run()。
+    2. 不绕过 Agent 直接调用 execute_safe_query / get_engine。
+       数据访问只有一个入口，就是 Agent。
+    3. 不通过 HTTP 调用自己的 /api/v1/data/query —— 同进程内直接调函数即可。
+
+    状态码约定：
+    - 200：Agent 给出了回答。**error 也是 200**，因为那是一个安全的、
+          可展示的业务结果，不是 HTTP 层故障。
+    - 422：请求体不合法（缺 question、纯空白、超过长度上限）。
+    - 500：图构建/执行抛异常，或 Agent 返回的 State 不符合公开契约。
+
+    错误响应只回显固定文案，绝不带问题原文、SQL、连接串或异常原文；
+    服务端日志也只记异常类型。
+    """
+    try:
+        graph = get_data_query_graph()
+        state = await graph.ainvoke({"question": req.question})
+    except Exception as exc:  # noqa: BLE001
+        # 只记异常类名。异常原文里可能带着连接串、SQL 片段甚至密钥；
+        # 也**不记 req.question** —— 用户问题属于用户数据，不进普通日志。
+        logger.warning("智能问数执行失败：%s", type(exc).__name__)
+        raise HTTPException(status_code=500, detail=AGENT_UNAVAILABLE_DETAIL) from exc
+
+    try:
+        return build_agent_response(state)
+    except AgentResponseContractError as exc:
+        # 契约异常的信息都是固定文案，可以直接进日志
+        logger.warning("智能问数结果不符合公开契约：%s", exc)
+        raise HTTPException(status_code=500, detail=AGENT_UNAVAILABLE_DETAIL) from exc

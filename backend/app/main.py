@@ -2,12 +2,29 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.routes import router
 from app.core.logging import configure_logging
 from app.repositories.database import dispose_engine
 
 configure_logging()
+
+# 本地开发允许的前端来源。
+#
+# 为什么需要它：前端跑在 localhost:3000，后端在 localhost:8000，
+# 端口不同就是跨域。没有这段配置，浏览器会在预检（OPTIONS）阶段
+# 直接拦掉请求，页面连一个字节的响应都拿不到。
+#
+# 这里**逐个列出**来源，而不是用 ["*"]：
+# 通配符等于允许任意站点带着浏览器里的凭据调用本服务。
+# 同理方法只开 GET/POST/OPTIONS，请求头只开 Content-Type。
+# 这份名单是本地开发用的，生产环境应当由部署配置或受控的允许列表管理，
+# 而不是写死在代码里。
+DEVELOPMENT_ALLOWED_ORIGINS = [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+]
 
 
 @asynccontextmanager
@@ -26,6 +43,17 @@ app = FastAPI(
     description="零售数据中台智能问数工作台后端服务",
     version="0.1.0",
     lifespan=lifespan,
+)
+
+# CORS 只影响浏览器能否读到响应，不参与任何业务逻辑：
+# 接口的行为、状态码、返回内容都不受它影响。
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=DEVELOPMENT_ALLOWED_ORIGINS,
+    # 本服务不使用 Cookie / Authorization 凭据，保持 False 最小化暴露面
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Content-Type"],
 )
 
 app.include_router(router)
