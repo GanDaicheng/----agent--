@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(curl -s -o /dev/null http://127.0.0.1:8000/)",
+      "Bash(PYTHONIOENCODING=utf-8 ./.venv/Scripts/python.exe _smoke_test.py)",
+      "Bash(node _smoke_frontend.js)",
+      "Bash(./.venv/Scripts/python.exe -m pip list --disable-pip-version-check)",
+      "Bash(./.venv/Scripts/python.exe -c ' *)",
+      "Bash(grep -E \"^\\\\.env$\")",
+      "Bash(./Scripts)",
+      "Bash(C:/Users/gdc/python/python.exe -c ' *)",
+      "Bash(\"C:/Users/gdc/python/python.exe\" -m pip list --disable-pip-version-check)"
+    ]
+  }
+}
