@@ -15,6 +15,9 @@
  * - 不打印问题全文，也不打印整份响应。
  */
 
+/** 拼接后端地址、取消判断、对象判断都来自 ./http，三个客户端共用一份。 */
+import { buildApiUrl, isAbortError, isRecord } from "./http";
+
 /** 三种结果状态，与后端 app/services/rag_answer.py 的定义一一对应。 */
 export type RagAnswerStatus = "ok" | "insufficient" | "no_knowledge";
 
@@ -45,10 +48,6 @@ export type RagAnswerResponse = {
   answer: string;
   sources: RagSource[];
 };
-
-/** 后端监听的端口。前端固定跑在 3000，后端固定跑在 8000。 */
-const API_PORT = "8000";
-const ENDPOINT_PATH = "/api/v1/rag/answer";
 
 /**
  * 问题长度上限，与后端 RagAnswerRequest 的 max_length 一致（它复用了问数的 500）。
@@ -82,31 +81,6 @@ export class RagAnswerError extends Error {
     this.name = "RagAnswerError";
     this.kind = kind;
   }
-}
-
-/**
- * 拼接后端地址。
- *
- * 用当前页面的协议和主机名 + 固定端口 8000，而不是写死 IP：
- * 从 localhost:3000 打开的页面会请求 localhost:8000，
- * 从 127.0.0.1:3000 打开的会请求 127.0.0.1:8000。
- * 这样既不会把某台机器的 IP 固化进代码，也顺带满足了后端的 CORS 白名单
- * （它是按来源逐个列出的，写死 IP 反而会被拦）。
- *
- * **只能在浏览器里调用**：服务端渲染时没有 window。
- */
-function buildEndpointUrl(): string {
-  const { protocol, hostname } = window.location;
-  return `${protocol}//${hostname}:${API_PORT}${ENDPOINT_PATH}`;
-}
-
-/** fetch 被 AbortController 取消时抛的就是这个，用它把「取消」和「失败」分开。 */
-export function isAbortError(error: unknown): boolean {
-  return error instanceof Error && error.name === "AbortError";
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function isStatus(value: unknown): value is RagAnswerStatus {
@@ -162,7 +136,7 @@ export async function askKnowledge(
   let response: Response;
 
   try {
-    response = await fetch(buildEndpointUrl(), {
+    response = await fetch(buildApiUrl("/api/v1/rag/answer"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       // 只发这两个字段：请求体里出现别的字段就说明有地方越界了

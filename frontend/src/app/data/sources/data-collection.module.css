@@ -1,115 +1,24 @@
 /*
  * 数据采集页面的样式。
  *
- * 沿用全局设计令牌（globals.css），局部用数据中台的绿色作为强调色——
- * 这个页面属于数据中台层，与智能应用层的紫色页面区分开。
+ * 状态色全部来自 globals.css 的语义色（success / warning / danger / info），
+ * 这里只负责布局。改造前本文件自带一整套 --dc-danger / --dc-warn 局部变量，
+ * 另两个页面也各有一套名字不同、取值几乎一样的副本，三份迟早会调歪。
  *
- * 状态一律「颜色 + 文字」双重表达：色盲用户和黑白打印下也必须分得清
- * 「上传成功」「文件被拒绝」「服务出错」。第三点对本页尤其重要——
- * 「文件不是 UTF-8」是用户自己能修的，不能和「后端挂了」混成一种红色。
+ * 本页不再有自己的「强调色」——主操作色统一由 --primary 承担，
+ * 绿色（--layer-data）只作为数据中台这个层级的类别识别色，用在层级标签上。
  */
 
 .page {
   display: flex;
   flex-direction: column;
-  gap: 20px;
-
-  /* 本地语义色。全局令牌里没有这几组，它们只在少数页面用到，不值得污染全局。 */
-  --dc-accent: var(--layer-data);
-  --dc-accent-soft: #f0fdf4;
-  --dc-accent-border: #bbf7d0;
-  --dc-danger: #b42318;
-  --dc-danger-soft: #fef3f2;
-  --dc-danger-border: #fda29b;
-  /* 「文件被拒绝」用琥珀色：它需要用户动手改，但不是服务故障 */
-  --dc-warn: #b54708;
-  --dc-warn-soft: #fffaeb;
-  --dc-warn-border: #fec84b;
-  --dc-muted-soft: #f1f5f9;
-}
-
-/* ------------------------------- 页头 ------------------------------- */
-
-.breadcrumb {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 16px;
-  font-size: 13px;
-  color: var(--text-muted);
-}
-
-.breadcrumb a {
-  color: var(--text-muted);
-  text-decoration: none;
-}
-
-.breadcrumb a:hover {
-  color: var(--dc-accent);
-  text-decoration: underline;
-}
-
-.sep {
-  color: var(--border-strong);
-}
-
-.header {
-  padding-bottom: 18px;
-  margin-bottom: 20px;
-  border-bottom: 1px solid var(--border);
-}
-
-.titleRow {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 12px;
-}
-
-.title {
-  margin: 0;
-  font-size: 24px;
-  font-weight: 650;
-  color: var(--text);
-}
-
-.subtitle {
-  margin: 8px 0 0;
-  font-size: 14px;
-  line-height: 1.6;
-  color: var(--text-muted);
-}
-
-.boundary {
-  display: flex;
-  gap: 12px;
-  margin-top: 16px;
-  padding: 12px 14px;
-  background: var(--dc-accent-soft);
-  border: 1px solid var(--dc-accent-border);
-  border-radius: var(--radius-sm);
-  font-size: 13px;
-  line-height: 1.6;
-  color: var(--text);
-}
-
-.boundaryTag {
-  flex: none;
-  align-self: flex-start;
-  padding: 1px 8px;
-  border-radius: 999px;
-  background: var(--dc-accent);
-  color: #fff;
-  font-size: 12px;
-  font-weight: 600;
-  white-space: nowrap;
+  gap: var(--space-5);
 }
 
 /* ------------------------------- 卡片 ------------------------------- */
 
 .card {
-  padding: 20px;
+  padding: var(--space-5);
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -119,39 +28,71 @@
 .cardHead {
   display: flex;
   flex-wrap: wrap;
-  align-items: baseline;
+  align-items: center;
   justify-content: space-between;
-  gap: 10px;
+  gap: var(--space-3);
 }
 
 .cardTitle {
   margin: 0;
-  font-size: 16px;
-  font-weight: 650;
-  color: var(--text);
+  font-size: var(--text-lg);
+  font-weight: var(--weight-semibold);
 }
 
 .cardCaption {
-  margin: 6px 0 16px;
-  font-size: 13px;
-  line-height: 1.6;
+  margin: var(--space-2) 0 var(--space-4);
+  font-size: var(--text-sm);
+  line-height: var(--leading-relaxed);
   color: var(--text-muted);
 }
 
-/* ------------------------------- 表单 ------------------------------- */
+/* ------------------------------ 拖拽区 ------------------------------ */
 
-.hint {
-  display: block;
-  margin-bottom: 6px;
-  font-size: 13px;
-  color: var(--text-muted);
-}
-
-.fileRow {
+.dropZone {
   display: flex;
-  flex-wrap: wrap;
+  flex-direction: column;
   align-items: center;
-  gap: 10px;
+  gap: var(--space-3);
+  padding: var(--space-6) var(--space-5);
+  background: var(--surface-muted);
+  border: 2px dashed var(--border-strong);
+  border-radius: var(--radius);
+  text-align: center;
+}
+
+/* 键盘用户 Tab 到隐藏的 input 时，整块区域要亮起来，否则看不出焦点在哪 */
+.dropZone:focus-within {
+  border-color: var(--primary);
+  background: var(--primary-soft);
+}
+
+.dropZone[data-dragging="true"] {
+  border-color: var(--primary);
+  background: var(--primary-soft);
+}
+
+.dropHint {
+  margin: 0;
+  font-size: var(--text-base);
+  color: var(--text);
+}
+
+.fileLabel {
+  display: inline-block;
+  margin: 0 var(--space-1);
+  padding: var(--space-2) var(--space-4);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-base);
+  font-weight: var(--weight-medium);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.fileLabel:hover {
+  border-color: var(--primary);
+  color: var(--primary);
 }
 
 /* 真正的 input 藏起来，用 label 当按钮：原生控件没法统一外观 */
@@ -167,72 +108,80 @@
   border: 0;
 }
 
-/*
- * 键盘可达性：input 被隐藏后，焦点仍然会落在它上面，
- * 用 :focus-visible + 兄弟选择器把焦点环画到 label 上。
- */
-.visuallyHidden:focus-visible + .fileLabel {
-  outline: 2px solid var(--dc-accent);
-  outline-offset: 2px;
+.dropNote {
+  margin: 0;
+  max-width: 56ch;
+  font-size: var(--text-xs);
+  line-height: var(--leading-relaxed);
+  color: var(--text-muted);
 }
 
-.fileLabel {
-  display: inline-block;
-  padding: 9px 18px;
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--border-strong);
-  background: var(--surface);
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--text);
-  cursor: pointer;
-}
+/* ---------------------------- 已选文件 ---------------------------- */
 
-.fileLabel:hover {
-  border-color: var(--dc-accent);
-  color: var(--dc-accent);
-}
-
-.picked {
+.pickedBox {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 10px;
-  font-size: 13px;
+  gap: var(--space-2) var(--space-3);
+  margin-top: var(--space-4);
+  padding: var(--space-3) var(--space-4);
+  background: var(--surface-muted);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.pickedLabel {
+  flex: none;
+  font-size: var(--text-xs);
   color: var(--text-muted);
 }
 
 .fileName {
   font-family: var(--font-mono);
-  padding: 1px 6px;
+  font-size: var(--text-sm);
+  padding: 1px var(--space-2);
   border-radius: 4px;
-  background: var(--surface-muted);
+  background: var(--surface);
   border: 1px solid var(--border);
   color: var(--text);
   /* 长文件名不要撑破卡片 */
   word-break: break-all;
 }
 
-.fileSize {
-  font-family: var(--font-mono);
-  font-size: 12px;
+.pickedMeta {
+  margin-left: auto;
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+
+/* ------------------------------- 表单 ------------------------------- */
+
+.field {
+  margin-top: var(--space-4);
+}
+
+.hint {
+  display: block;
+  margin-bottom: var(--space-2);
+  font-size: var(--text-sm);
+  color: var(--text-muted);
 }
 
 .textInput {
   width: 100%;
-  padding: 10px 12px;
+  padding: var(--space-3);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-sm);
   font-family: inherit;
-  font-size: 14px;
+  font-size: var(--text-base);
   color: var(--text);
   background: var(--surface);
 }
 
 .textInput:focus {
-  outline: 2px solid var(--dc-accent);
+  outline: 2px solid var(--primary);
   outline-offset: 1px;
-  border-color: var(--dc-accent);
+  border-color: var(--primary);
 }
 
 .textInput:disabled {
@@ -240,186 +189,120 @@
   color: var(--text-muted);
 }
 
-.field {
-  margin-top: 16px;
-}
-
 .inputMeta {
   display: flex;
   flex-wrap: wrap;
   justify-content: space-between;
-  gap: 8px;
-  margin-top: 6px;
-  font-size: 12px;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+  font-size: var(--text-xs);
   color: var(--text-muted);
 }
 
 .counter[data-over="true"] {
-  color: var(--dc-danger);
-  font-weight: 600;
-}
-
-.validation {
-  margin: 10px 0 0;
-  padding: 8px 10px;
-  border-radius: var(--radius-sm);
-  background: var(--dc-warn-soft);
-  border: 1px solid var(--dc-warn-border);
-  font-size: 13px;
-  color: var(--dc-warn);
+  color: var(--danger);
+  font-weight: var(--weight-semibold);
 }
 
 .actions {
   display: flex;
   flex-wrap: wrap;
-  gap: 10px;
-  margin-top: 18px;
+  gap: var(--space-3);
+  margin-top: var(--space-4);
 }
 
-.button {
-  padding: 9px 18px;
-  border-radius: var(--radius-sm);
-  border: 1px solid transparent;
-  font-family: inherit;
-  font-size: 14px;
-  font-weight: 600;
-  cursor: pointer;
+/* 提示里的按钮 */
+.noticeActions {
+  margin-top: var(--space-3);
 }
 
-.button:disabled {
-  cursor: not-allowed;
-  opacity: 0.55;
-}
+/* ----------------------------- 列表汇总 ----------------------------- */
 
-.primary {
-  background: var(--dc-accent);
-  border-color: var(--dc-accent);
-  color: #fff;
-}
-
-.secondary {
-  background: var(--surface);
-  border-color: var(--border-strong);
-  color: var(--text);
-}
-
-/* ------------------------------- 状态提示 ------------------------------- */
-
-.notice {
+.listSummary {
   display: flex;
-  gap: 12px;
-  align-items: flex-start;
-  margin-top: 16px;
-  padding: 14px 16px;
-  border-radius: var(--radius);
-  border: 1px solid var(--border);
-  background: var(--surface-muted);
-  font-size: 14px;
-  line-height: 1.65;
-  color: var(--text);
-}
-
-.noticeTag {
-  flex: none;
-  align-self: flex-start;
-  padding: 2px 9px;
-  border-radius: 999px;
-  font-size: 12px;
-  font-weight: 600;
-  white-space: nowrap;
-  background: var(--dc-muted-soft);
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-2) var(--space-4);
+  margin-bottom: var(--space-4);
+  padding-bottom: var(--space-3);
+  border-bottom: 1px solid var(--border);
+  font-size: var(--text-sm);
   color: var(--text-muted);
 }
 
-/* 入库成功 */
-.notice[data-tone="success"] {
-  background: var(--dc-accent-soft);
-  border-color: var(--dc-accent-border);
+.listSummary strong {
+  color: var(--text);
+  font-family: var(--font-mono);
 }
 
-.notice[data-tone="success"] .noticeTag {
-  background: var(--dc-accent);
-  color: #fff;
+.summaryNote {
+  font-size: var(--text-xs);
 }
 
-/* 文件被拒绝：琥珀色，用户自己能修 */
-.notice[data-tone="rejected"] {
-  background: var(--dc-warn-soft);
-  border-color: var(--dc-warn-border);
+/* ------------------------------ 筛选器 ------------------------------ */
+
+.filters {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  margin-bottom: var(--space-4);
 }
 
-.notice[data-tone="rejected"] .noticeTag {
-  background: var(--dc-warn);
-  color: #fff;
-}
-
-/* 服务故障：红色 */
-.notice[data-tone="error"] {
-  background: var(--dc-danger-soft);
-  border-color: var(--dc-danger-border);
-  color: var(--dc-danger);
-}
-
-.notice[data-tone="error"] .noticeTag {
-  background: var(--dc-danger);
-  color: #fff;
-}
-
-/* 已取消：中性灰，不是错误 */
-.notice[data-tone="cancelled"] {
-  background: var(--dc-muted-soft);
-}
-
-/* 加载中 */
-.loading {
+.formatFilter {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 12px;
-  margin-top: 16px;
-  padding: 14px 16px;
-  border-radius: var(--radius);
+  gap: var(--space-3);
+}
+
+.chipRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.chip {
+  padding: var(--space-1) var(--space-3);
+  font-family: inherit;
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  color: var(--text-muted);
+  background: var(--surface-muted);
   border: 1px solid var(--border);
-  background: var(--surface);
-  font-size: 14px;
+  border-radius: var(--radius-pill);
+  cursor: pointer;
+}
+
+.chip:hover {
+  border-color: var(--primary);
+  color: var(--primary);
+}
+
+.chip[data-active="true"] {
+  color: var(--primary);
+  background: var(--primary-soft);
+  border-color: var(--primary-border);
+}
+
+.filterResult {
+  margin: 0 0 var(--space-3);
+  font-size: var(--text-xs);
   color: var(--text-muted);
 }
 
-.spinner {
-  width: 16px;
-  height: 16px;
-  border: 2px solid var(--border-strong);
-  border-top-color: var(--dc-accent);
-  border-radius: 50%;
-  animation: dc-spin 0.8s linear infinite;
-}
-
-@keyframes dc-spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-/* 尊重「减少动态效果」的系统设置 */
-@media (prefers-reduced-motion: reduce) {
-  .spinner {
-    animation: none;
-  }
-}
-
-/* ------------------------------- 文档列表 ------------------------------- */
+/* ----------------------------- 文档列表 ----------------------------- */
 
 .docList {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: var(--space-3);
   margin: 0;
   padding: 0;
   list-style: none;
 }
 
 .docItem {
-  padding: 12px 14px;
+  padding: var(--space-3) var(--space-4);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   background: var(--surface-muted);
@@ -429,19 +312,21 @@
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;
-  gap: 10px;
+  gap: var(--space-3);
 }
 
 .docTitle {
-  font-size: 14px;
-  font-weight: 650;
+  font-size: var(--text-base);
+  font-weight: var(--weight-semibold);
   color: var(--text);
+  /* 长标题换行而不是撑破卡片 */
+  overflow-wrap: anywhere;
 }
 
 .docFile {
   font-family: var(--font-mono);
-  font-size: 12px;
-  padding: 1px 6px;
+  font-size: var(--text-xs);
+  padding: 1px var(--space-2);
   border-radius: 4px;
   background: var(--surface);
   border: 1px solid var(--border);
@@ -453,43 +338,19 @@
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 12px;
-  margin-top: 8px;
-  font-size: 12px;
+  gap: var(--space-3);
+  margin-top: var(--space-2);
+  font-size: var(--text-xs);
   color: var(--text-muted);
 }
 
-/* 切片数：用绿色的数字强调，它是「这份文档进了多少内容」的直接度量 */
+/* 切片数：把它加重，它是「这份文档进了多少内容」的直接度量 */
 .chunkBadge {
   font-family: var(--font-mono);
   font-weight: 700;
-  color: var(--dc-accent);
+  color: var(--primary);
 }
 
 .timestamp {
   font-family: var(--font-mono);
-}
-
-/* ------------------------------- 空态 ------------------------------- */
-
-.empty {
-  padding: 28px 20px;
-  border: 1px dashed var(--border-strong);
-  border-radius: var(--radius);
-  background: var(--surface-muted);
-  text-align: center;
-}
-
-.emptyTitle {
-  margin: 0 0 6px;
-  font-size: 15px;
-  font-weight: 650;
-  color: var(--text);
-}
-
-.emptyText {
-  margin: 0;
-  font-size: 13px;
-  line-height: 1.7;
-  color: var(--text-muted);
 }

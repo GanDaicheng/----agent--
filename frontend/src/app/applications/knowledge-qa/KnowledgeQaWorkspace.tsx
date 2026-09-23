@@ -2,11 +2,14 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { EmptyState } from "@/components/ui/EmptyState";
+import { LoadingIndicator } from "@/components/ui/LoadingIndicator";
+import { Notice } from "@/components/ui/Notice";
+import { isAbortError } from "@/lib/api/http";
 import {
   RAG_DEFAULT_TOP_K,
   RagAnswerError,
   askKnowledge,
-  isAbortError,
   type RagAnswerResponse,
 } from "@/lib/api/rag-answer";
 
@@ -120,43 +123,32 @@ export function KnowledgeQaWorkspace({ examples }: Props) {
       />
 
       {busy ? (
-        <div className={styles.loading} role="status" aria-live="polite">
-          <span className={styles.spinner} aria-hidden="true" />
-          <span>正在检索知识库并生成回答…</span>
-          <button
-            type="button"
-            className={`${styles.button} ${styles.secondary}`}
-            onClick={handleCancel}
-          >
-            取消
-          </button>
-        </div>
+        <LoadingIndicator
+          message="正在检索知识库并生成回答…"
+          note="会先做一次向量检索，再让模型依据检索到的资料作答，通常需要数秒。"
+          onCancel={handleCancel}
+        />
       ) : null}
 
       {phase === "cancelled" ? (
-        <p className={styles.notice} data-tone="cancelled" role="status">
-          <span className={styles.noticeTag}>已取消</span>
-          本次提问已取消。可以修改问题后重新提交。
-        </p>
+        <Notice tone="neutral" tag="已取消">
+          已停止等待本次回答。后端可能仍在处理这次请求，可以修改问题后重新提问。
+        </Notice>
       ) : null}
 
       {phase === "failed" && errorMessage ? (
-        <p className={styles.notice} data-tone="error" role="alert">
-          <span className={styles.noticeTag}>请求失败</span>
+        <Notice tone="danger" tag="请求失败" role="alert">
           {errorMessage}
-        </p>
+        </Notice>
       ) : null}
 
       {/* 初始态：还没提问过。刻意不自动填示例、也不自动提交 */}
       {phase === "idle" ? (
-        <div className={styles.empty}>
-          <p className={styles.emptyTitle}>还没有提问</p>
-          <p className={styles.emptyText}>
-            输入一个业务口径、指标定义或规则类问题，或者点上面的示例填进输入框。
-            <br />
-            回答只依据知识库文档；资料不足时会明确说明，不会编造。
-          </p>
-        </div>
+        <EmptyState title="还没有提问">
+          输入一个业务口径、指标定义或规则类问题，或者点上面的示例填进输入框。
+          <br />
+          回答只依据知识库文档；资料不足时会明确说明，不会编造。
+        </EmptyState>
       ) : null}
 
       {result ? <KnowledgeAnswerPanel result={result} /> : null}

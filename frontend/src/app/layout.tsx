@@ -1,16 +1,19 @@
 import type { Metadata } from "next";
 
 import { PlatformShell } from "@/components/platform/PlatformShell";
+import {
+  PLATFORM_NAME,
+  PLATFORM_TAGLINE,
+} from "@/features/platform/platform-config";
 
 import "./globals.css";
 
 export const metadata: Metadata = {
   title: {
-    default: "零售企业智能化平台",
-    template: "%s · 零售企业智能化平台",
+    default: PLATFORM_NAME,
+    template: `%s · ${PLATFORM_NAME}`,
   },
-  description:
-    "从业务能力、数据资产到 AI 智能应用的一体化建设原型，展示业务中台、数据中台、AI 中台与智能应用的分层建设状态。",
+  description: `${PLATFORM_TAGLINE}。包含知识文档采集与向量检索、基于 LangGraph 的受控智能问数 Agent，以及知识问答与智能问数两个应用。`,
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {

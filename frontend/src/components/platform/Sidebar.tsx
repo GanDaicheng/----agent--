@@ -1,6 +1,7 @@
 import Link from "next/link";
 
 import {
+  EXTRA_NAV_ITEMS,
   OVERVIEW_NAV_ITEM,
   PLATFORM_SECTIONS,
   STATUS_LABEL,
@@ -80,8 +81,31 @@ export function Sidebar({ activeHref, open, onNavigate }: Props) {
         </section>
       ))}
 
+      {/* 不属于任何层级的独立页面。没有状态点——它是讲解性质的一页，没有建设进度。 */}
+      <ul className={styles.extraList}>
+        {EXTRA_NAV_ITEMS.map((item) => {
+          const active = item.href === activeHref;
+
+          return (
+            <li key={item.href}>
+              <Link
+                href={item.href}
+                className={styles.extraLink}
+                data-active={active}
+                aria-current={active ? "page" : undefined}
+                title={item.desc}
+                onClick={onNavigate}
+              >
+                {item.name}
+              </Link>
+            </li>
+          );
+        })}
+      </ul>
+
       <p className={styles.footnote}>
-        导航中的圆点表示模块建设状态：已完成 / 建设中 / 待接入。
+        导航里的圆点表示模块的建设进度。它是人工维护的功能状态，
+        与顶栏检测到的服务连通性是两回事。
       </p>
     </nav>
   );

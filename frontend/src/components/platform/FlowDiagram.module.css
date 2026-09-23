@@ -1,0 +1,135 @@
+.flow {
+  margin: 0;
+}
+
+.title {
+  margin: 0 0 var(--space-4);
+  font-size: var(--text-md);
+  font-weight: var(--weight-semibold);
+}
+
+.steps {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.step {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 100%;
+}
+
+.stepCaption {
+  margin: 0 0 var(--space-2);
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+
+.nodeRow {
+  display: flex;
+  justify-content: center;
+  gap: var(--space-3);
+  width: 100%;
+}
+
+.node {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  flex: 1;
+  min-width: 0;
+  max-width: 340px;
+  padding: var(--space-3) var(--space-4);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  text-align: center;
+}
+
+.nodeLabel {
+  font-size: var(--text-base);
+  font-weight: var(--weight-medium);
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.nodeHint {
+  font-size: var(--text-xs);
+  line-height: var(--leading-normal);
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+
+/* 步骤之间：一条竖线 + 一个向下的三角，纯 CSS，无动画 */
+.arrow {
+  position: relative;
+  flex: none;
+  width: 2px;
+  height: var(--space-6);
+  background: var(--border-strong);
+}
+
+.arrow::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  bottom: -1px;
+  transform: translateX(-50%);
+  border-left: 5px solid transparent;
+  border-right: 5px solid transparent;
+  border-top: 6px solid var(--border-strong);
+}
+
+/* ---------------------- 深色面板（架构页主流程） ---------------------- */
+
+.flow[data-tone="dark"] {
+  padding: var(--space-5);
+  background: #0f172a;
+  border-radius: var(--radius);
+}
+
+.flow[data-tone="dark"] .title {
+  color: #e2e8f0;
+}
+
+.flow[data-tone="dark"] .stepCaption {
+  color: #94a3b8;
+}
+
+.flow[data-tone="dark"] .node {
+  background: #1e293b;
+  border-color: #334155;
+}
+
+.flow[data-tone="dark"] .nodeLabel {
+  color: #f1f5f9;
+}
+
+.flow[data-tone="dark"] .nodeHint {
+  color: #94a3b8;
+}
+
+.flow[data-tone="dark"] .arrow {
+  background: #475569;
+}
+
+.flow[data-tone="dark"] .arrow::after {
+  border-top-color: #475569;
+}
+
+/* 窄屏：并列节点改为上下排列，否则两三个盒子挤在一行里读不动 */
+@media (max-width: 640px) {
+  .nodeRow[data-parallel="true"] {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .node {
+    max-width: none;
+  }
+}

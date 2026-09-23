@@ -3,6 +3,7 @@ import type {
   QueryResult,
   ValueFormat,
 } from "@/lib/api/agent-data-query";
+import { Notice } from "@/components/ui/Notice";
 
 import {
   formatAxisValue,
@@ -45,10 +46,9 @@ export function ResultChart({ result, suggestion }: Props) {
   if (notice.kind === "notice") {
     return (
       <div>
-        <p className={styles.notice} data-tone="empty">
-          <span className={styles.noticeTag}>提示</span>
+        <Notice tone="neutral" tag="提示">
           {notice.text}
-        </p>
+        </Notice>
         {suggestion ? (
           <p className={styles.chartReason}>
             图表建议依据：{suggestion.reason}

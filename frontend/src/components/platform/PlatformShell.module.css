@@ -13,9 +13,9 @@
 
 .content {
   width: 100%;
-  max-width: 1120px;
+  max-width: var(--content-max);
   margin: 0 auto;
-  padding: 28px 32px 64px;
+  padding: var(--space-6) var(--space-7) var(--space-8);
   min-width: 0;
 }
 
@@ -25,6 +25,6 @@
   }
 
   .content {
-    padding: 20px 16px 48px;
+    padding: var(--space-5) var(--space-4) var(--space-8);
   }
 }

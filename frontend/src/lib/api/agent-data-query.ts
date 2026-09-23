@@ -10,6 +10,12 @@
  * - 不打印问题全文，也不打印整份响应（问题属于用户数据）。
  */
 
+/**
+ * 拼接后端地址、取消判断、对象判断都来自 ./http —— 三个客户端本来各抄了一份，
+ * 一模一样地抄，改一处就得记着改三处。
+ */
+import { buildApiUrl, isAbortError, isRecord } from "./http";
+
 export type QueryResultSource = "postgres" | "mock";
 
 export type QueryResult = {
@@ -21,6 +27,15 @@ export type QueryResult = {
 
 export type ChartType = "line" | "bar" | "table" | "none";
 export type ValueFormat = "currency" | "number" | "percent";
+
+/**
+ * 契约里这两个枚举的合法取值。
+ *
+ * 写在这里而不是散在校验函数里，是为了让「类型定义」和「运行时校验」看同一份清单——
+ * 两处各写一份的话，将来加一种图表类型极容易出现「类型上允许、校验里被拒」。
+ */
+const CHART_TYPES: readonly ChartType[] = ["line", "bar", "table", "none"];
+const VALUE_FORMATS: readonly ValueFormat[] = ["currency", "number", "percent"];
 
 export type ChartSuggestion = {
   chart_type: ChartType;
@@ -58,9 +73,7 @@ export type AgentDataQueryResponse = {
   knowledge_sources?: KnowledgeSource[];
 };
 
-/** 后端监听的端口。前端固定跑在 3000，后端固定跑在 8000。 */
-const API_PORT = "8000";
-const ENDPOINT_PATH = "/api/v1/agent/data-query";
+/** 后端监听的端口与地址拼接见 ./http。 */
 
 /**
  * question 的长度上限，与后端 AgentDataQueryRequest 的 max_length 保持一致。
@@ -89,29 +102,8 @@ export class AgentDataQueryError extends Error {
 }
 
 /**
- * 拼接后端地址。
- *
- * 用当前页面的协议和主机名 + 固定端口 8000，而不是写死 IP：
- * 从 localhost:3000 打开的页面会请求 localhost:8000，
- * 从 127.0.0.1:3000 打开的会请求 127.0.0.1:8000。
- * 这样既不会把某台机器的 IP 固化进代码，也顺带满足了后端的 CORS 白名单
- * （它是按来源逐个列出的，写死 IP 反而会被拦）。
- *
- * **只能在浏览器里调用**：服务端渲染时没有 window。
+ * 拼接后端地址、取消判断、对象判断都来自 ./http（见文件顶部的 import）。
  */
-function buildEndpointUrl(): string {
-  const { protocol, hostname } = window.location;
-  return `${protocol}//${hostname}:${API_PORT}${ENDPOINT_PATH}`;
-}
-
-/** fetch 被 AbortController 取消时抛的就是这个，用它把「取消」和「失败」分开。 */
-export function isAbortError(error: unknown): boolean {
-  return error instanceof Error && error.name === "AbortError";
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function isQueryResult(value: unknown): value is QueryResult {
   if (!isRecord(value)) return false;
@@ -126,11 +118,36 @@ function isQueryResult(value: unknown): value is QueryResult {
   return value.row_count === value.rows.length;
 }
 
+function isChartType(value: unknown): value is ChartType {
+  return typeof value === "string" && (CHART_TYPES as readonly string[]).includes(value);
+}
+
+function isValueFormat(value: unknown): value is ValueFormat {
+  return typeof value === "string" && (VALUE_FORMATS as readonly string[]).includes(value);
+}
+
+/** 契约允许这三个字段为 null（例如表格建议没有 y 轴），但一旦有值就必须是字符串。 */
+function isNullableString(value: unknown): value is string | null {
+  return value === null || typeof value === "string";
+}
+
+/**
+ * 图表建议的校验。
+ *
+ * 七个字段**每一个都判**，包括 chart_type 与 value_format 的枚举取值：
+ * 页面是拿着这些值直接决定「画折线还是画柱状」并按 value_format 格式化的，
+ * 放进来一个没见过的 chart_type，轻则画错图，重则拿着 undefined 去取列。
+ * 只判断「是个字符串」是不够的。
+ */
 function isChartSuggestion(value: unknown): value is ChartSuggestion {
   if (!isRecord(value)) return false;
   return (
-    typeof value.chart_type === "string" &&
+    isChartType(value.chart_type) &&
     typeof value.title === "string" &&
+    isNullableString(value.x_field) &&
+    isNullableString(value.y_field) &&
+    isNullableString(value.series_field) &&
+    (value.value_format === null || isValueFormat(value.value_format)) &&
     typeof value.reason === "string"
   );
 }
@@ -186,7 +203,7 @@ export async function queryAgent(
   let response: Response;
 
   try {
-    response = await fetch(buildEndpointUrl(), {
+    response = await fetch(buildApiUrl("/api/v1/agent/data-query"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       // 只发 question：请求体里出现别的字段就说明有地方越界了

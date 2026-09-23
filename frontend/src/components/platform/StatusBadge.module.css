@@ -1,11 +1,11 @@
 .badge {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  gap: var(--space-1);
   flex: none;
   border: 1px solid transparent;
-  border-radius: 999px;
-  font-weight: 500;
+  border-radius: var(--radius-pill);
+  font-weight: var(--weight-medium);
   white-space: nowrap;
 }
 
@@ -19,13 +19,13 @@
 }
 
 .badge[data-size="sm"] {
-  padding: 1px 8px;
-  font-size: 12px;
+  padding: 1px var(--space-2);
+  font-size: var(--text-xs);
 }
 
 .badge[data-size="md"] {
-  padding: 3px 10px;
-  font-size: 13px;
+  padding: 3px var(--space-3);
+  font-size: var(--text-sm);
 }
 
 .badge[data-status="done"] {

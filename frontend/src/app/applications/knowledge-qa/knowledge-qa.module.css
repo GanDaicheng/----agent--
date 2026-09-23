@@ -1,114 +1,23 @@
 /*
  * 知识库问答页面的样式。
  *
- * 沿用全局设计令牌（globals.css），局部用 AI 中台的紫色作为强调色——
- * 这个页面属于智能应用层，但背后的能力（embedding + 检索 + 模型）来自 AI 中台。
+ * 状态色全部来自 globals.css 的语义色，这里只负责布局。
+ * 本页也不再有自己的强调色——主操作色统一由 --primary 承担。
  *
- * 状态一律「颜色 + 文字」双重表达：色盲用户和黑白打印下也必须分得清
- * 「答不出来」「出错」「还没问」。这一点对本页尤其重要——
- * 「资料不足」是正常结果而不是故障，视觉上不能和红色报错混成一种。
+ * 「资料不足」用 warning 而不是 danger：它是正常结果，不是故障。
+ * 这一点在本页比任何地方都重要，所以在 KnowledgeAnswerPanel 里显式选了 tone。
  */
 
 .page {
   display: flex;
   flex-direction: column;
-  gap: 20px;
-
-  /* 本地语义色。全局令牌里没有这几组，它们只在少数页面用到，不值得污染全局。 */
-  --kq-accent: var(--layer-ai);
-  --kq-accent-soft: #f5f3ff;
-  --kq-danger: #b42318;
-  --kq-danger-soft: #fef3f2;
-  --kq-danger-border: #fda29b;
-  --kq-muted-soft: #f1f5f9;
-  /* 「资料不足」用琥珀色：它不是错误，是「诚实地说不知道」 */
-  --kq-warn: #b54708;
-  --kq-warn-soft: #fffaeb;
-  --kq-warn-border: #fec84b;
-}
-
-/* ------------------------------- 页头 ------------------------------- */
-
-.breadcrumb {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 16px;
-  font-size: 13px;
-  color: var(--text-muted);
-}
-
-.breadcrumb a {
-  color: var(--text-muted);
-  text-decoration: none;
-}
-
-.breadcrumb a:hover {
-  color: var(--kq-accent);
-  text-decoration: underline;
-}
-
-.sep {
-  color: var(--border-strong);
-}
-
-.header {
-  padding-bottom: 18px;
-  margin-bottom: 20px;
-  border-bottom: 1px solid var(--border);
-}
-
-.titleRow {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 12px;
-}
-
-.title {
-  margin: 0;
-  font-size: 24px;
-  font-weight: 650;
-  color: var(--text);
-}
-
-.subtitle {
-  margin: 8px 0 0;
-  font-size: 14px;
-  line-height: 1.6;
-  color: var(--text-muted);
-}
-
-.boundary {
-  display: flex;
-  gap: 12px;
-  margin-top: 16px;
-  padding: 12px 14px;
-  background: var(--kq-accent-soft);
-  border: 1px solid #ddd6fe;
-  border-radius: var(--radius-sm);
-  font-size: 13px;
-  line-height: 1.6;
-  color: var(--text);
-}
-
-.boundaryTag {
-  flex: none;
-  align-self: flex-start;
-  padding: 1px 8px;
-  border-radius: 999px;
-  background: var(--kq-accent);
-  color: #fff;
-  font-size: 12px;
-  font-weight: 600;
-  white-space: nowrap;
+  gap: var(--space-5);
 }
 
 /* ------------------------------- 卡片 ------------------------------- */
 
 .card {
-  padding: 20px;
+  padding: var(--space-5);
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -117,15 +26,14 @@
 
 .cardTitle {
   margin: 0;
-  font-size: 16px;
-  font-weight: 650;
-  color: var(--text);
+  font-size: var(--text-lg);
+  font-weight: var(--weight-semibold);
 }
 
 .cardCaption {
-  margin: 6px 0 16px;
-  font-size: 13px;
-  line-height: 1.6;
+  margin: var(--space-2) 0 var(--space-4);
+  font-size: var(--text-sm);
+  line-height: var(--leading-relaxed);
   color: var(--text-muted);
 }
 
@@ -133,29 +41,29 @@
 
 .hint {
   display: block;
-  margin-bottom: 6px;
-  font-size: 13px;
+  margin-bottom: var(--space-2);
+  font-size: var(--text-sm);
   color: var(--text-muted);
 }
 
 .textarea {
   width: 100%;
   min-height: 88px;
-  padding: 12px;
+  padding: var(--space-3);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-sm);
   font-family: inherit;
-  font-size: 14px;
-  line-height: 1.6;
+  font-size: var(--text-base);
+  line-height: var(--leading-normal);
   color: var(--text);
   background: var(--surface);
   resize: vertical;
 }
 
 .textarea:focus {
-  outline: 2px solid var(--kq-accent);
+  outline: 2px solid var(--primary);
   outline-offset: 1px;
-  border-color: var(--kq-accent);
+  border-color: var(--primary);
 }
 
 .textarea:disabled {
@@ -167,39 +75,39 @@
   display: flex;
   flex-wrap: wrap;
   justify-content: space-between;
-  gap: 8px;
-  margin-top: 6px;
-  font-size: 12px;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+  font-size: var(--text-xs);
   color: var(--text-muted);
 }
 
 .counter[data-over="true"] {
-  color: var(--kq-danger);
-  font-weight: 600;
+  color: var(--danger);
+  font-weight: var(--weight-semibold);
 }
 
 .validation {
-  margin: 8px 0 0;
-  padding: 8px 10px;
+  margin: var(--space-2) 0 0;
+  padding: var(--space-2) var(--space-3);
   border-radius: var(--radius-sm);
-  background: var(--kq-danger-soft);
-  border: 1px solid var(--kq-danger-border);
-  font-size: 13px;
-  color: var(--kq-danger);
+  background: var(--danger-soft);
+  border: 1px solid var(--danger-border);
+  font-size: var(--text-sm);
+  color: var(--danger);
 }
 
 /* top_k 选择器 */
 
 .options {
-  margin-top: 14px;
+  margin-top: var(--space-4);
 }
 
 .select {
-  padding: 6px 10px;
+  padding: var(--space-2) var(--space-3);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-sm);
   font-family: inherit;
-  font-size: 14px;
+  font-size: var(--text-base);
   color: var(--text);
   background: var(--surface);
 }
@@ -210,89 +118,59 @@
 }
 
 .optionNote {
-  margin: 6px 0 0;
-  font-size: 12px;
-  line-height: 1.6;
+  margin: var(--space-2) 0 0;
+  font-size: var(--text-xs);
+  line-height: var(--leading-relaxed);
   color: var(--text-muted);
 }
 
 .actions {
   display: flex;
   flex-wrap: wrap;
-  gap: 10px;
-  margin-top: 16px;
-}
-
-.button {
-  padding: 9px 18px;
-  border-radius: var(--radius-sm);
-  border: 1px solid transparent;
-  font-family: inherit;
-  font-size: 14px;
-  font-weight: 600;
-  cursor: pointer;
-}
-
-.button:disabled {
-  cursor: not-allowed;
-  opacity: 0.55;
-}
-
-.primary {
-  background: var(--kq-accent);
-  border-color: var(--kq-accent);
-  color: #fff;
-}
-
-.secondary {
-  background: var(--surface);
-  border-color: var(--border-strong);
-  color: var(--text);
-}
-
-.secondary:disabled {
-  opacity: 0.5;
+  gap: var(--space-3);
+  margin-top: var(--space-4);
 }
 
 /* 示例问题 */
 
 .examples {
-  margin-top: 20px;
-  padding-top: 16px;
+  margin-top: var(--space-5);
+  padding-top: var(--space-4);
   border-top: 1px solid var(--border);
 }
 
 .examplesLabel {
-  margin: 0 0 10px;
-  font-size: 13px;
+  margin: 0 0 var(--space-3);
+  font-size: var(--text-sm);
   color: var(--text-muted);
 }
 
 .exampleList {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: var(--space-2);
   margin: 0;
   padding: 0;
   list-style: none;
 }
 
+/* 示例用虚线药丸，与实心的操作按钮区分开：它只是「填进输入框」，不是提交 */
 .example {
-  padding: 7px 12px;
+  padding: var(--space-2) var(--space-3);
   border: 1px dashed var(--border-strong);
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: var(--surface-muted);
   font-family: inherit;
-  font-size: 13px;
+  font-size: var(--text-sm);
   color: var(--text);
   cursor: pointer;
   text-align: left;
 }
 
 .example:hover:not(:disabled) {
-  border-color: var(--kq-accent);
-  color: var(--kq-accent);
-  background: var(--kq-accent-soft);
+  border-color: var(--primary);
+  color: var(--primary);
+  background: var(--primary-soft);
 }
 
 .example:disabled {
@@ -300,98 +178,20 @@
   opacity: 0.55;
 }
 
-/* ------------------------------- 状态提示 ------------------------------- */
+/* --------------------------- 提示里的段落 --------------------------- */
 
-.notice {
-  display: flex;
-  gap: 12px;
-  align-items: flex-start;
-  padding: 14px 16px;
-  border-radius: var(--radius);
-  border: 1px solid var(--border);
-  background: var(--surface);
-  font-size: 14px;
-  line-height: 1.65;
-  color: var(--text);
+.noticeText {
+  margin: 0;
+  font-size: var(--text-sm);
+  line-height: var(--leading-relaxed);
 }
 
-.noticeTag {
-  flex: none;
-  align-self: flex-start;
-  padding: 2px 9px;
-  border-radius: 999px;
-  font-size: 12px;
-  font-weight: 600;
-  white-space: nowrap;
-  background: var(--kq-muted-soft);
-  color: var(--text-muted);
+.noticeText + .noticeText {
+  margin-top: var(--space-2);
 }
 
-/* 出错：红色 */
-.notice[data-tone="error"] {
-  background: var(--kq-danger-soft);
-  border-color: var(--kq-danger-border);
-  color: var(--kq-danger);
-}
-
-.notice[data-tone="error"] .noticeTag {
-  background: var(--kq-danger);
-  color: #fff;
-}
-
-/* 资料不足 / 知识库为空：琥珀色，与报错区分开 */
-.notice[data-tone="insufficient"],
-.notice[data-tone="no_knowledge"] {
-  background: var(--kq-warn-soft);
-  border-color: var(--kq-warn-border);
-}
-
-.notice[data-tone="insufficient"] .noticeTag,
-.notice[data-tone="no_knowledge"] .noticeTag {
-  background: var(--kq-warn);
-  color: #fff;
-}
-
-/* 已取消：中性灰，不是错误 */
-.notice[data-tone="cancelled"] {
-  background: var(--muted-soft, var(--kq-muted-soft));
-}
-
-/* 加载中 */
-
-.loading {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 12px;
-  padding: 14px 16px;
-  border-radius: var(--radius);
-  border: 1px solid var(--border);
-  background: var(--surface);
-  font-size: 14px;
-  color: var(--text-muted);
-}
-
-.spinner {
-  width: 16px;
-  height: 16px;
-  border: 2px solid var(--border-strong);
-  border-top-color: var(--kq-accent);
-  border-radius: 50%;
-  animation: kq-spin 0.8s linear infinite;
-}
-
-@keyframes kq-spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-/* 尊重「减少动态效果」的系统设置 */
-@media (prefers-reduced-motion: reduce) {
-  .spinner {
-    animation: none;
-  }
+.noticeActions {
+  margin-top: var(--space-3);
 }
 
 /* ------------------------------- 回答 ------------------------------- */
@@ -400,38 +200,44 @@
   margin: 0;
   /* 保留换行，但绝不按 HTML / Markdown 执行 */
   white-space: pre-wrap;
-  font-size: 15px;
-  line-height: 1.75;
+  font-size: var(--text-md);
+  line-height: var(--leading-relaxed);
   color: var(--text);
+  overflow-wrap: anywhere;
 }
 
-/* ------------------------------- 来源 ------------------------------- */
+/* --------------------------- 检索参考资料 --------------------------- */
 
 .sources {
-  margin-top: 20px;
-  padding-top: 16px;
+  margin-top: var(--space-5);
+  padding-top: var(--space-4);
   border-top: 1px solid var(--border);
 }
 
+.sourcesTitle {
+  margin: 0;
+  font-size: var(--text-md);
+  font-weight: var(--weight-semibold);
+}
+
 .sourcesNote {
-  margin: 6px 0 14px;
-  font-size: 12px;
-  line-height: 1.6;
+  margin: var(--space-2) 0 0;
+  font-size: var(--text-xs);
+  line-height: var(--leading-relaxed);
   color: var(--text-muted);
 }
 
 .sourceList {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  margin: 0;
+  gap: var(--space-3);
+  margin: var(--space-4) 0 0;
   padding: 0;
   list-style: none;
-  counter-reset: kq-source;
 }
 
 .source {
-  padding: 12px 14px;
+  padding: var(--space-3) var(--space-4);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   background: var(--surface-muted);
@@ -441,25 +247,25 @@
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;
-  gap: 8px;
+  gap: var(--space-2);
 }
 
 .rank {
   flex: none;
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--text-xs);
   font-weight: 700;
-  color: var(--kq-accent);
+  color: var(--primary);
 }
 
 .sectionTitle {
-  font-size: 14px;
-  font-weight: 650;
+  font-size: var(--text-base);
+  font-weight: var(--weight-semibold);
   color: var(--text);
 }
 
 .documentTitle {
-  font-size: 13px;
+  font-size: var(--text-sm);
   color: var(--text-muted);
 }
 
@@ -472,29 +278,32 @@
  * 但视觉层级上仍然要让位于回答。
  */
 .preview {
-  margin: 10px 0 0;
-  padding: 8px 12px;
+  margin: var(--space-3) 0 0;
+  padding: var(--space-2) var(--space-3);
   border-left: 3px solid var(--border-strong);
   border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
   background: var(--surface);
-  font-size: 13px;
-  line-height: 1.7;
+  font-size: var(--text-sm);
+  line-height: var(--leading-relaxed);
   color: var(--text-muted);
+  /* 后端截出来的是纯文本，里面的换行要照着显示 */
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .sourceMeta {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 10px;
-  margin-top: 8px;
-  font-size: 12px;
+  gap: var(--space-3);
+  margin-top: var(--space-3);
+  font-size: var(--text-xs);
   color: var(--text-muted);
 }
 
 .fileName {
   font-family: var(--font-mono);
-  padding: 1px 6px;
+  padding: 1px var(--space-2);
   border-radius: 4px;
   background: var(--surface);
   border: 1px solid var(--border);
@@ -508,14 +317,14 @@
 .similarity {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-2);
   margin-left: auto;
 }
 
 .meter {
   width: 72px;
   height: 6px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: var(--border);
   overflow: hidden;
 }
@@ -523,38 +332,14 @@
 .meterFill {
   display: block;
   height: 100%;
-  border-radius: 999px;
-  background: var(--kq-accent);
+  border-radius: var(--radius-pill);
+  background: var(--primary);
 }
 
 .similarityValue {
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--text-xs);
   color: var(--text);
-}
-
-/* ------------------------------- 初始态 ------------------------------- */
-
-.empty {
-  padding: 28px 20px;
-  border: 1px dashed var(--border-strong);
-  border-radius: var(--radius);
-  background: var(--surface-muted);
-  text-align: center;
-}
-
-.emptyTitle {
-  margin: 0 0 6px;
-  font-size: 15px;
-  font-weight: 650;
-  color: var(--text);
-}
-
-.emptyText {
-  margin: 0;
-  font-size: 13px;
-  line-height: 1.7;
-  color: var(--text-muted);
 }
 
 /* 窄屏：相似度的横条换行，不要挤在一行里 */

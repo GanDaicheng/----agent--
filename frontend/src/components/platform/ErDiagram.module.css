@@ -1,0 +1,187 @@
+.wrapper {
+  /* 行间距要参与连接线的定位计算，所以提成变量，别在两处各写一个 8px */
+  --er-gap: var(--space-2);
+  --er-brace-width: 44px;
+}
+
+.diagram {
+  display: grid;
+  /* 列间距必须是 0：维度表右侧的短横要正好接到括号列的左边缘，
+     留了间距就会出现一段断开的线 */
+  grid-template-columns: minmax(0, 1fr) var(--er-brace-width) minmax(0, 1fr);
+  column-gap: 0;
+  align-items: center;
+}
+
+/* ---------------------------- 维度表一列 ---------------------------- */
+
+.dims {
+  display: flex;
+  flex-direction: column;
+  gap: var(--er-gap);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.dim {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--space-3) var(--space-4);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-left: 3px solid var(--layer-data);
+  border-radius: var(--radius-sm);
+}
+
+/* 从维度表右边缘伸出、接到括号上的一小段横线 */
+.dim::after {
+  content: "";
+  position: absolute;
+  left: 100%;
+  top: 50%;
+  width: var(--er-brace-width);
+  height: 2px;
+  background: var(--border-strong);
+}
+
+/* ------------------------------ 括号列 ------------------------------ */
+
+.brace {
+  position: relative;
+  align-self: stretch;
+}
+
+/*
+ * 竖线：只画从「第一张维度表中心」到「最后一张维度表中心」这一段。
+ * 四行等高、间距为 --er-gap 时，行高 = (100% - 3×gap) / 4，
+ * 所以上下各内缩半个行高即可，写成 calc 就不怕以后改间距或加表。
+ */
+.brace::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  width: 2px;
+  top: calc((100% - 3 * var(--er-gap)) / 8);
+  bottom: calc((100% - 3 * var(--er-gap)) / 8);
+  background: var(--border-strong);
+}
+
+/* 从竖线中点指向事实表的横线 */
+.brace::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: 2px;
+  background: var(--border-strong);
+}
+
+/* ----------------------------- 事实表 ----------------------------- */
+
+.fact {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-5) var(--space-4);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-left: 3px solid var(--layer-ai);
+  border-radius: var(--radius-sm);
+}
+
+/* 横线末端的箭头，指向事实表 */
+.fact::before {
+  content: "";
+  position: absolute;
+  left: calc(-1 * var(--space-2));
+  top: 50%;
+  transform: translateY(-50%);
+  border-top: 5px solid transparent;
+  border-bottom: 5px solid transparent;
+  border-left: 6px solid var(--border-strong);
+}
+
+.tableName {
+  font-family: var(--font-mono);
+  font-size: var(--text-base);
+  font-weight: var(--weight-semibold);
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.tableRole {
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+
+.factRows {
+  margin-top: var(--space-1);
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+
+/* --------------------------- 文字说明部分 --------------------------- */
+
+.summary {
+  margin: var(--space-4) 0 0;
+  font-size: var(--text-sm);
+  line-height: var(--leading-relaxed);
+  color: var(--text-muted);
+}
+
+.relations {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: var(--space-4) 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.relation {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-2) var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  background: var(--surface-muted);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.relationPath {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--primary);
+  overflow-wrap: anywhere;
+}
+
+.relationLabel {
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+
+/* 窄屏：连线在这个宽度下只会添乱，改为上下排列，关系清单承担全部信息 */
+@media (max-width: 640px) {
+  .diagram {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .dim::after,
+  .brace,
+  .fact::before {
+    display: none;
+  }
+
+  .fact {
+    margin-top: var(--er-gap);
+    /* 竖向排列时用左边框区分层级已经不够明显，改成上边框 */
+    border-left: 1px solid var(--border-strong);
+    border-top: 3px solid var(--layer-ai);
+  }
+}

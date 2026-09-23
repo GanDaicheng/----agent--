@@ -1,5 +1,6 @@
 import { PLATFORM_NAME } from "@/features/platform/platform-config";
 
+import { ServiceHealthCheck } from "./ServiceHealthCheck";
 import styles from "./Topbar.module.css";
 
 type Props = {
@@ -11,6 +12,13 @@ type Props = {
   onToggleMenu: () => void;
 };
 
+/**
+ * 顶栏：品牌、当前位置、服务连通性检查。
+ *
+ * 这里曾经写死两块状态文案（大意是「未连接后端」和「前端骨架阶段」），
+ * 接口接通之后两句都成了假的，而且它们是**硬编码在组件里的**——
+ * 改配置不会让它们更新。现在只放真实探测出来的结果。
+ */
 export function Topbar({
   pageName,
   sectionName,
@@ -43,16 +51,7 @@ export function Topbar({
         </p>
       </div>
 
-      <dl className={styles.meta}>
-        <div className={styles.metaItem}>
-          <dt>环境状态</dt>
-          <dd>本地静态预览 · 未连接后端</dd>
-        </div>
-        <div className={styles.metaItem}>
-          <dt>项目阶段</dt>
-          <dd>阶段 1 · 前端骨架</dd>
-        </div>
-      </dl>
+      <ServiceHealthCheck />
     </header>
   );
 }

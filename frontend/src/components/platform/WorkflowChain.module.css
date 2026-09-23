@@ -1,20 +1,20 @@
 .wrapper {
-  margin: 24px 0;
+  margin: var(--space-6) 0;
 }
 
 .title {
-  margin: 0 0 12px;
-  font-size: 15px;
-  font-weight: 600;
+  margin: 0 0 var(--space-3);
+  font-size: var(--text-md);
+  font-weight: var(--weight-semibold);
 }
 
 .list {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-2);
   margin: 0;
-  padding: 16px;
+  padding: var(--space-4);
   list-style: none;
   background: var(--surface);
   border: 1px solid var(--border);
@@ -25,7 +25,7 @@
 .step {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-2);
 }
 
 .index {
@@ -36,25 +36,25 @@
   height: 18px;
   flex: none;
   font-size: 11px;
-  font-weight: 600;
+  font-weight: var(--weight-semibold);
   color: var(--layer-ai);
   background: color-mix(in srgb, var(--layer-ai) 10%, var(--surface));
   border-radius: 50%;
 }
 
 .name {
-  padding: 3px 10px;
-  font-size: 13px;
+  padding: 3px var(--space-3);
+  font-size: var(--text-sm);
   color: var(--text);
   background: var(--surface-muted);
   border: 1px solid var(--border);
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   white-space: nowrap;
 }
 
 .arrow::before {
   content: "→";
-  font-size: 13px;
+  font-size: var(--text-sm);
   color: var(--border-strong);
 }
 
@@ -73,7 +73,7 @@
   }
 
   .arrow {
-    padding-left: 6px;
+    padding-left: var(--space-2);
   }
 
   .arrow::before {

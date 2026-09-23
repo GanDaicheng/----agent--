@@ -1,73 +1,59 @@
+/*
+ * 平台总览页的样式。
+ *
+ * 三层的识别色只在「平台能力」那三张卡片的顶边和层名上出现一次，
+ * 不往卡片内部涂色——层级是分类，不是状态。
+ */
+
 .page {
   display: flex;
   flex-direction: column;
 }
 
-/* 顶部欢迎区 */
+/* ------------------------------- 顶部 ------------------------------- */
+
 .hero {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 20px;
-  padding-bottom: 24px;
+  padding-bottom: var(--space-6);
   border-bottom: 1px solid var(--border);
 }
 
-.heroMain {
-  min-width: 0;
-}
-
-.eyebrow {
-  margin: 0 0 10px;
-  font-size: 12px;
-  font-weight: 600;
-  letter-spacing: 0.08em;
-  color: var(--status-building);
+.badge {
+  display: inline-block;
+  margin: 0 0 var(--space-3);
+  padding: 2px var(--space-3);
+  background: var(--primary-soft);
+  border: 1px solid var(--primary-border);
+  border-radius: var(--radius-pill);
+  color: var(--primary);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
 }
 
 .heroTitle {
   margin: 0;
-  font-size: 30px;
+  font-size: var(--text-title);
+  font-weight: var(--weight-semibold);
   letter-spacing: -0.5px;
 }
 
 .heroSubtitle {
-  margin: 10px 0 0;
+  margin: var(--space-3) 0 0;
   max-width: 62ch;
-  font-size: 15px;
+  font-size: var(--text-md);
   color: var(--text-muted);
 }
 
-.facts {
-  display: flex;
-  gap: 10px;
-  margin: 0;
-}
-
-.fact {
-  min-width: 132px;
-  padding: 12px 16px;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  box-shadow: var(--shadow);
-}
-
-.fact dt {
-  font-size: 12px;
+.heroNote {
+  margin: var(--space-3) 0 0;
+  max-width: 70ch;
+  font-size: var(--text-sm);
   color: var(--text-muted);
 }
 
-.fact dd {
-  margin: 4px 0 0;
-  font-size: 15px;
-  font-weight: 600;
-}
+/* ----------------------------- 通用分节 ----------------------------- */
 
-/* 通用分节 */
 .section {
-  margin-top: 36px;
+  margin-top: var(--space-8);
 }
 
 .sectionHead {
@@ -75,98 +61,215 @@
   flex-wrap: wrap;
   align-items: flex-end;
   justify-content: space-between;
-  gap: 10px 20px;
-  margin-bottom: 16px;
+  gap: var(--space-2) var(--space-5);
+  margin-bottom: var(--space-4);
 }
 
 .sectionTitle {
   margin: 0;
-  font-size: 17px;
-  font-weight: 600;
+  font-size: var(--text-lg);
+  font-weight: var(--weight-semibold);
+  /* 标题与说明在同一行时，说明要能换到下一行 */
+  flex: 1 1 100%;
 }
 
 .sectionNote {
-  margin: 6px 0 0;
+  margin: 0;
   max-width: 70ch;
-  font-size: 13px;
+  font-size: var(--text-sm);
   color: var(--text-muted);
 }
 
-.progressGrid,
-.completedGrid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
-  gap: 16px;
-  align-items: stretch;
-}
+/* --------------------------- 三个核心功能 --------------------------- */
 
-.nextLabel {
-  display: inline-block;
-  margin-right: 6px;
-  padding: 1px 7px;
-  font-size: 11px;
-  color: var(--layer-business);
-  background: color-mix(in srgb, var(--layer-business) 9%, var(--surface));
-  border-radius: 999px;
-}
-
-/* 推荐下一步 */
-.roadmap {
+.entryGrid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
-  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: var(--space-4);
   margin: 0;
   padding: 0;
   list-style: none;
-  counter-reset: roadmap;
 }
 
-.roadmapItem {
+.entryCard {
   display: flex;
-  gap: 12px;
-  padding: 16px;
+  flex-direction: column;
+  gap: var(--space-2);
+  height: 100%;
+  padding: var(--space-5);
   background: var(--surface);
   border: 1px solid var(--border);
+  border-top: 3px solid var(--primary);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  text-decoration: none;
+  color: inherit;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.entryCard:hover {
+  border-color: var(--primary-border);
+  border-top-color: var(--primary);
+  box-shadow: var(--shadow-lift);
+}
+
+.entrySection {
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+
+.entryTitle {
+  font-size: var(--text-lg);
+  font-weight: var(--weight-semibold);
+  color: var(--text);
+}
+
+.entryDesc {
+  flex: 1;
+  font-size: var(--text-sm);
+  line-height: var(--leading-relaxed);
+  color: var(--text-muted);
+}
+
+.entryAction {
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  color: var(--primary);
+}
+
+/* --------------------------- 三层能力卡片 --------------------------- */
+
+.layerGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: var(--space-4);
+  align-items: start;
+}
+
+.layerCard {
+  /* 每层一个识别色，只用在顶边和层名上 */
+  --layer-accent: var(--layer-data);
+  display: flex;
+  flex-direction: column;
+  padding: var(--space-5);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-top: 3px solid var(--layer-accent);
   border-radius: var(--radius);
   box-shadow: var(--shadow);
 }
 
-.roadmapIndex {
-  display: inline-flex;
+.layerCard[data-layer="ai"] {
+  --layer-accent: var(--layer-ai);
+}
+
+.layerCard[data-layer="applications"] {
+  --layer-accent: var(--layer-app);
+}
+
+.layerHead {
+  display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  justify-content: center;
-  flex: none;
-  width: 24px;
-  height: 24px;
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--layer-app);
-  background: color-mix(in srgb, var(--layer-app) 9%, var(--surface));
-  border-radius: 50%;
+  gap: var(--space-2);
 }
 
-.roadmapBody {
-  min-width: 0;
-}
-
-.roadmapStep {
+.layerName {
   margin: 0;
-  font-size: 14px;
-  font-weight: 600;
+  font-size: var(--text-md);
+  font-weight: var(--weight-semibold);
+  color: var(--layer-accent);
 }
 
-.roadmapDetail {
-  margin: 6px 0 0;
-  font-size: 13px;
-  line-height: 1.7;
+.layerDuty {
+  margin: var(--space-2) 0 0;
+  font-size: var(--text-sm);
+  line-height: var(--leading-normal);
   color: var(--text-muted);
 }
 
+.moduleList {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  margin: var(--space-4) 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.moduleCard {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  background: var(--surface-muted);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  text-decoration: none;
+  color: inherit;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+a.moduleCard:hover {
+  border-color: var(--layer-accent);
+  background: var(--surface);
+}
+
+.moduleName {
+  font-size: var(--text-base);
+  font-weight: var(--weight-semibold);
+  color: var(--text);
+}
+
+.moduleSummary {
+  font-size: var(--text-xs);
+  line-height: var(--leading-normal);
+  color: var(--text-muted);
+}
+
+.capList {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin: 0;
+  padding-left: var(--space-4);
+  font-size: var(--text-sm);
+  line-height: var(--leading-normal);
+  color: var(--text);
+}
+
+.capList li::marker {
+  color: var(--border-strong);
+}
+
+.moduleAction {
+  margin-top: var(--space-1);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  color: var(--primary);
+}
+
+/* ----------------------------- 两条链路 ----------------------------- */
+
+.chainGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: var(--space-4);
+}
+
+/* WorkflowChain 自带上下外边距，放进网格后把首尾的多余间距压掉 */
+.chainGrid > * {
+  margin-top: 0;
+  margin-bottom: 0;
+}
+
+/* ------------------------------ 页脚 ------------------------------ */
+
 .footer {
-  margin-top: 40px;
-  padding-top: 18px;
+  margin-top: var(--space-8);
+  padding-top: var(--space-5);
   border-top: 1px solid var(--border);
-  font-size: 13px;
+  font-size: var(--text-sm);
   color: var(--text-muted);
 }
 
@@ -174,13 +277,11 @@
   .heroTitle {
     font-size: 24px;
   }
+}
 
-  .facts {
-    width: 100%;
-  }
-
-  .fact {
-    flex: 1;
-    min-width: 0;
+@media (prefers-reduced-motion: reduce) {
+  .entryCard,
+  .moduleCard {
+    transition: none;
   }
 }

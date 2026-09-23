@@ -2,15 +2,16 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { LoadingIndicator } from "@/components/ui/LoadingIndicator";
+import { Notice } from "@/components/ui/Notice";
+import { isAbortError } from "@/lib/api/http";
 import {
   AgentDataQueryError,
   QUESTION_MAX_LENGTH,
-  isAbortError,
   queryAgent,
   type AgentDataQueryResponse,
 } from "@/lib/api/agent-data-query";
 
-import { QueryLoadingState } from "./QueryLoadingState";
 import { QueryResultPanel } from "./QueryResultPanel";
 import { QuestionInput } from "./QuestionInput";
 import styles from "./data-query.module.css";
@@ -117,20 +118,24 @@ export function DataQueryWorkspace({ examples }: Props) {
         examples={examples}
       />
 
-      {busy ? <QueryLoadingState onCancel={handleCancel} /> : null}
+      {busy ? (
+        <LoadingIndicator
+          message="正在分析，请稍候…"
+          note="需要调用模型生成查询方案并读取数据库，通常需要数秒到十几秒。这个过程没有进度接口，所以不显示百分比、也不逐个点亮步骤。"
+          onCancel={handleCancel}
+        />
+      ) : null}
 
       {phase === "cancelled" ? (
-        <p className={styles.notice} data-tone="cancelled" role="status">
-          <span className={styles.noticeTag}>已取消</span>
-          本次分析已取消。可以修改问题后重新提交。
-        </p>
+        <Notice tone="neutral" tag="已取消">
+          已停止等待本次分析。后端可能仍在处理这次请求，可以修改问题后重新提交。
+        </Notice>
       ) : null}
 
       {phase === "failed" && errorMessage ? (
-        <p className={styles.notice} data-tone="error" role="alert">
-          <span className={styles.noticeTag}>请求失败</span>
+        <Notice tone="danger" tag="请求失败" role="alert">
           {errorMessage}
-        </p>
+        </Notice>
       ) : null}
 
       {result ? <QueryResultPanel result={result} /> : null}

@@ -1,37 +1,40 @@
 .page {
-  padding: 48px 0;
+  padding: var(--space-8) 0;
   max-width: 60ch;
 }
 
 .code {
   margin: 0;
   font-family: var(--font-mono);
-  font-size: 13px;
+  font-size: var(--text-sm);
   letter-spacing: 0.1em;
   color: var(--text-muted);
 }
 
 .title {
-  margin: 8px 0 0;
-  font-size: 24px;
+  margin: var(--space-2) 0 0;
+  font-size: var(--text-title);
+  font-weight: var(--weight-semibold);
 }
 
 .desc {
-  margin: 12px 0 24px;
-  font-size: 14px;
+  margin: var(--space-3) 0 var(--space-6);
+  font-size: var(--text-base);
+  line-height: var(--leading-relaxed);
   color: var(--text-muted);
 }
 
 .link {
   display: inline-block;
-  padding: 8px 16px;
-  font-size: 14px;
-  color: var(--surface);
-  background: var(--layer-business);
+  padding: var(--space-2) var(--space-4);
+  font-size: var(--text-base);
+  font-weight: var(--weight-medium);
+  color: var(--on-primary);
+  background: var(--primary);
   border-radius: var(--radius-sm);
   text-decoration: none;
 }
 
 .link:hover {
-  background: color-mix(in srgb, var(--layer-business) 88%, #000);
+  background: var(--primary-hover);
 }

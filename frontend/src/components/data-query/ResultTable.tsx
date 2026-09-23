@@ -28,12 +28,17 @@ export function ResultTable({ result, valueField, valueFormat }: Props) {
       <div className={styles.tableMeta}>
         <span>返回 {row_count} 行</span>
         <span className={styles.sourceTag} data-source={source}>
-          {source === "mock" ? "模拟数据" : "数据来源：PostgreSQL 样例数据"}
+          {source === "mock"
+            ? "模拟数据 · 演示结果，不是真实查询"
+            : "数据来源：PostgreSQL 零售样例数据"}
         </span>
       </div>
 
       {rows.length === 0 ? (
-        <p className={styles.hint}>查询已执行，但没有匹配的数据。</p>
+        <p className={styles.hint}>
+          查询已执行，但没有匹配的数据。这与「金额为 0」不是一回事——
+          是这次查询没有命中任何一行。
+        </p>
       ) : (
         <div className={styles.tableWrap}>
           <table className={styles.table}>

@@ -14,6 +14,9 @@
  * - 不打印文件正文，也不打印整份响应。
  */
 
+/** 拼接后端地址、取消判断、对象判断都来自 ./http，三个客户端共用一份。 */
+import { buildApiUrl, isAbortError, isRecord } from "./http";
+
 /** 一次入库的动作。对应后端 KnowledgeIngestionResult.action。 */
 export type RagDocumentUploadAction = "insert" | "update" | "skip";
 
@@ -50,9 +53,7 @@ export type RagDocumentListResponse = {
   documents: RagDocumentSummary[];
 };
 
-/** 后端监听的端口。前端固定跑在 3000，后端固定跑在 8000。 */
-const API_PORT = "8000";
-const ENDPOINT_PATH = "/api/v1/rag/documents";
+/** 后端监听的端口与地址拼接见 ./http。 */
 
 /**
  * 上传体积上限，与后端 routes.MAX_UPLOAD_BYTES 一致（10 MiB）。
@@ -111,31 +112,6 @@ export class RagDocumentsError extends Error {
     this.name = "RagDocumentsError";
     this.kind = kind;
   }
-}
-
-/**
- * 拼接后端地址。
- *
- * 用当前页面的协议和主机名 + 固定端口 8000，而不是写死 IP：
- * 从 localhost:3000 打开的页面会请求 localhost:8000，
- * 从 127.0.0.1:3000 打开的会请求 127.0.0.1:8000。
- * 这样既不会把某台机器的 IP 固化进代码，也顺带满足了后端的 CORS 白名单
- * （它是按来源逐个列出的，写死 IP 反而会被拦）。
- *
- * **只能在浏览器里调用**：服务端渲染时没有 window。
- */
-function buildEndpointUrl(): string {
-  const { protocol, hostname } = window.location;
-  return `${protocol}//${hostname}:${API_PORT}${ENDPOINT_PATH}`;
-}
-
-/** fetch 被 AbortController 取消时抛的就是这个，用它把「取消」和「失败」分开。 */
-export function isAbortError(error: unknown): boolean {
-  return error instanceof Error && error.name === "AbortError";
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 // --------------------------------------------------------------------------
@@ -263,7 +239,7 @@ export async function uploadDocument(
 
   let response: Response;
   try {
-    response = await fetch(buildEndpointUrl(), {
+    response = await fetch(buildApiUrl("/api/v1/rag/documents"), {
       method: "POST",
       // **不要手写 Content-Type**：multipart 的分隔符边界由浏览器生成，
       // 手写成 "multipart/form-data" 会缺 boundary，后端直接解析失败。
@@ -308,7 +284,7 @@ export async function listDocuments(
   let response: Response;
 
   try {
-    response = await fetch(buildEndpointUrl(), { method: "GET", signal });
+    response = await fetch(buildApiUrl("/api/v1/rag/documents"), { method: "GET", signal });
   } catch (error) {
     if (isAbortError(error)) throw error;
     throw new RagDocumentsError("network");

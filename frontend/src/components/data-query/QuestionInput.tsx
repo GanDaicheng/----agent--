@@ -1,5 +1,6 @@
 import type { KeyboardEvent } from "react";
 
+import { Button } from "@/components/ui/Button";
 import { QUESTION_MAX_LENGTH } from "@/lib/api/agent-data-query";
 
 import styles from "./data-query.module.css";
@@ -48,6 +49,7 @@ export function QuestionInput({
       </h2>
       <p className={styles.cardCaption}>
         用一句中文描述想看的分析，例如趋势、排行、区域对比或会员复购。
+        样例数据覆盖 2025 全年，问题里写明具体的年月更容易得到结果。
       </p>
 
       <label className={styles.hint} htmlFor="question-input">
@@ -60,7 +62,7 @@ export function QuestionInput({
         onChange={(event) => onChange(event.target.value)}
         onKeyDown={handleKeyDown}
         disabled={busy}
-        placeholder="例如：华东地区近六个月销售额趋势怎么样？"
+        placeholder="例如：2025 年各月销售额趋势怎么样？"
         aria-describedby="question-meta"
         // 刻意不设 maxLength：要给用户「超长时看到提示」的机会，
         // 直接截断会让人以为自己输全了
@@ -80,22 +82,16 @@ export function QuestionInput({
       ) : null}
 
       <div className={styles.actions}>
-        <button
-          type="button"
-          className={`${styles.button} ${styles.primary}`}
-          onClick={onSubmit}
-          disabled={!canSubmit}
-        >
+        <Button variant="primary" onClick={onSubmit} disabled={!canSubmit}>
           {busy ? "分析中…" : "开始分析"}
-        </button>
-        <button
-          type="button"
-          className={`${styles.button} ${styles.secondary}`}
+        </Button>
+        <Button
+          variant="secondary"
           onClick={onClear}
           disabled={busy || (value.length === 0 && trimmed.length === 0)}
         >
           清空
-        </button>
+        </Button>
       </div>
 
       <div className={styles.examples}>

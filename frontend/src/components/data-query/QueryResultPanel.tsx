@@ -1,4 +1,5 @@
 import type { AgentDataQueryResponse } from "@/lib/api/agent-data-query";
+import { Notice } from "@/components/ui/Notice";
 
 import { AgentEventTimeline } from "./AgentEventTimeline";
 import { ResultChart } from "./ResultChart";
@@ -10,13 +11,39 @@ type Props = {
 };
 
 /**
+ * 执行记录。
+ *
+ * 默认折叠：它是「想核对时才会看」的第三层信息，摊开会把结论和图表往下推。
+ * 摘要里写上步数，折叠状态下也能知道里面有多少内容。
+ *
+ * 用原生 <details> 而不是自己写展开状态：键盘操作、屏幕阅读器的展开/折叠语义
+ * 浏览器已经做对了，自己实现一遍只会漏掉这些。
+ */
+function ExecutionLog({ events }: { events: string[] }) {
+  if (events.length === 0) return null;
+
+  return (
+    <details className={styles.log}>
+      <summary className={styles.logSummary}>
+        本次执行记录（{events.length} 步）
+      </summary>
+      <p className={styles.logNote}>
+        以下是后端返回的公开步骤，前端不做推断或补充。
+      </p>
+      <AgentEventTimeline events={events} />
+    </details>
+  );
+}
+
+/**
  * 结果区。
  *
  * 两种形态泾渭分明：
- * - status === "error"：只展示受控的错误说明和执行过程，**不展示结果与图表**。
+ * - status === "error"：只展示受控的错误说明和执行记录，**不展示结果与图表**。
  *   出错时 State 里可能残留上一次的中间产物，展示出来就是误导。
- * - status === "ok"：结论、过程、图表、明细依次排开。没有查询结果也是正常结果
- *   （例如问题不属于问数范畴），照实说明即可，不当成故障。
+ * - status === "ok"：按「结论 → 图表/表格 → 来源与行数 → 执行记录 → 知识资料」
+ *   的优先级排。用户先要的是答案，再是图，最后才是过程与依据。
+ *   没有查询结果也是正常结果（例如问题不属于问数范畴），照实说明即可，不当成故障。
  */
 export function QueryResultPanel({ result }: Props) {
   if (result.status === "error") {
@@ -29,11 +56,7 @@ export function QueryResultPanel({ result }: Props) {
           Agent 返回了受控的失败说明，因此没有查询结果，也没有图表建议。
         </p>
         <p className={`${styles.answer} ${styles.answerError}`}>{result.answer}</p>
-
-        <h3 className={styles.cardTitle} style={{ marginTop: 20 }}>
-          分析过程
-        </h3>
-        <AgentEventTimeline events={result.events} />
+        <ExecutionLog events={result.events} />
       </section>
     );
   }
@@ -48,9 +71,10 @@ export function QueryResultPanel({ result }: Props) {
 
   return (
     <div className={styles.page}>
+      {/* 1. 结论 */}
       <section className={styles.card} aria-labelledby="answer-heading">
         <h2 id="answer-heading" className={styles.cardTitle}>
-          Agent 分析结论
+          分析结论
         </h2>
         <p className={styles.cardCaption}>
           以下结论由模型根据查询结果生成，只复述结果里已有的事实。
@@ -59,17 +83,55 @@ export function QueryResultPanel({ result }: Props) {
         <p className={styles.answer}>{result.answer}</p>
       </section>
 
-      {/* 参考知识来源。紧跟在结论之后：它是「为什么这么解释」的依据。
+      {/* 2. 图表或表格 */}
+      {queryResult ? (
+        <>
+          <section className={styles.card} aria-labelledby="chart-heading">
+            <h2 id="chart-heading" className={styles.cardTitle}>
+              图表建议
+            </h2>
+            <ResultChart result={queryResult} suggestion={suggestion} />
+          </section>
+
+          {/* 3. 数据来源与结果行数 —— 就放在表格上方，它们是同一件事的元信息 */}
+          <section className={styles.card} aria-labelledby="table-heading">
+            <h2 id="table-heading" className={styles.cardTitle}>
+              查询结果
+            </h2>
+            <ResultTable
+              result={queryResult}
+              valueField={valueField}
+              valueFormat={valueFormat}
+            />
+          </section>
+        </>
+      ) : (
+        <Notice tone="neutral" tag="无结果">
+          本次没有返回查询结果。这通常意味着问题不属于数据分析范畴，
+          或者没有匹配到可用的数据资产——两种情况都不是系统故障。
+          注意「没有结果」不等于「结果为 0」。
+        </Notice>
+      )}
+
+      {/* 4. 执行记录（可折叠）。没有步骤时整块不渲染，不留一张空卡片 */}
+      {result.events.length > 0 ? (
+        <section className={styles.card}>
+          <ExecutionLog events={result.events} />
+        </section>
+      ) : null}
+
+      {/* 5. 知识参考资料。放在最后：它是解释的依据，不是数字的来源。
           没有查知识库（或后端没返回这个字段）时整块不渲染，不留空框。 */}
       {knowledgeSources.length > 0 ? (
         <section className={styles.card} aria-labelledby="knowledge-heading">
           <h2 id="knowledge-heading" className={styles.cardTitle}>
-            参考知识来源
+            检索参考资料
           </h2>
           {/* 这条边界必须写在用户看得到的地方：数字来自查询结果，
               文档只解释口径与原因。不写清楚，用户会以为数字出自这些文档。 */}
           <p className={styles.cardCaption}>
-            本次回答参考的业务文档小节。数据结论来自查询结果，这些资料只用于解释口径与可能的原因。
+            本次回答参考的业务文档小节。数据结论来自查询结果，
+            这些资料只用于解释口径与可能的原因，且不代表模型逐条引用过。
           </p>
           <ul className={styles.knowledgeList}>
             {knowledgeSources.map((source, index) => (
@@ -81,7 +143,10 @@ export function QueryResultPanel({ result }: Props) {
                   <span className={styles.knowledgeRank}>#{index + 1}</span>
                   <span className={styles.knowledgeSection}>{source.section_title}</span>
                   <span className={styles.knowledgeDoc}>{source.document_title}</span>
-                  <span className={styles.knowledgeSimilarity}>
+                  <span
+                    className={styles.knowledgeSimilarity}
+                    title="相似度只用于比较同一批结果的相对好坏，不是答案正确率"
+                  >
                     相似度 {source.similarity.toFixed(4)}
                   </span>
                 </div>
@@ -96,44 +161,6 @@ export function QueryResultPanel({ result }: Props) {
           </ul>
         </section>
       ) : null}
-
-      <section className={styles.card} aria-labelledby="events-heading">
-        <h2 id="events-heading" className={styles.cardTitle}>
-          分析过程
-        </h2>
-        <p className={styles.cardCaption}>
-          由后端返回的公开步骤，前端不做推断或补充。
-        </p>
-        <AgentEventTimeline events={result.events} />
-      </section>
-
-      {queryResult ? (
-        <>
-          <section className={styles.card} aria-labelledby="chart-heading">
-            <h2 id="chart-heading" className={styles.cardTitle}>
-              图表建议
-            </h2>
-            <ResultChart result={queryResult} suggestion={suggestion} />
-          </section>
-
-          <section className={styles.card} aria-labelledby="table-heading">
-            <h2 id="table-heading" className={styles.cardTitle}>
-              查询结果
-            </h2>
-            <ResultTable
-              result={queryResult}
-              valueField={valueField}
-              valueFormat={valueFormat}
-            />
-          </section>
-        </>
-      ) : (
-        <p className={styles.notice} data-tone="empty">
-          <span className={styles.noticeTag}>无结果</span>
-          本次没有返回查询结果。这通常意味着问题不属于数据分析范畴，
-          或者没有匹配到可用的数据资产——两种情况都不是系统故障。
-        </p>
-      )}
     </div>
   );
 }

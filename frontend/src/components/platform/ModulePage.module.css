@@ -3,168 +3,60 @@
   flex-direction: column;
 }
 
-.breadcrumb {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 18px;
-  font-size: 13px;
-  color: var(--text-muted);
-}
-
-.breadcrumb a {
-  color: var(--text-muted);
-  text-decoration: none;
-}
-
-.breadcrumb a:hover {
-  color: var(--layer-business);
-  text-decoration: underline;
-}
-
-.sep {
-  color: var(--border-strong);
-}
-
-.current {
-  color: var(--text);
-}
-
-.header {
-  padding-bottom: 20px;
-  border-bottom: 1px solid var(--border);
-}
-
-.titleRow {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 12px;
-}
-
-.title {
-  margin: 0;
-  font-size: 26px;
-  letter-spacing: -0.3px;
-}
-
-.summary {
-  margin: 10px 0 0;
-  max-width: 68ch;
-  font-size: 15px;
-  color: var(--text-muted);
-}
-
-.sectionLine {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-  margin: 12px 0 0;
-  font-size: 13px;
-  color: var(--text-muted);
-}
-
-.sectionName {
-  padding: 1px 8px;
+/* 页头下方的层级标签 */
+.sectionTag {
+  padding: 1px var(--space-2);
   color: var(--text);
   background: var(--surface-muted);
   border: 1px solid var(--border);
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
 }
 
-.notice {
+/* -------------------------- 功能页入口 -------------------------- */
+
+.entry {
   display: flex;
   flex-wrap: wrap;
-  align-items: baseline;
-  gap: 10px;
-  margin: 20px 0 0;
-  padding: 12px 16px;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-left: 3px solid var(--status-building);
-  border-radius: var(--radius-sm);
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  margin-top: var(--space-6);
+  padding: var(--space-4) var(--space-5);
+  background: var(--primary-soft);
+  border: 1px solid var(--primary-border);
+  border-radius: var(--radius);
 }
 
-.noticeLabel {
-  flex: none;
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--status-building);
-  letter-spacing: 0.04em;
+.entryBody {
+  min-width: 0;
 }
 
-.noticeText {
-  flex: 1;
-  min-width: 220px;
+.entryTitle {
   margin: 0;
-  font-size: 13.5px;
-  line-height: 1.7;
-  color: var(--text);
+  font-size: var(--text-md);
+  font-weight: var(--weight-semibold);
 }
 
-.block {
-  margin-top: 28px;
-}
-
-.blockHead {
-  margin-bottom: 12px;
-}
-
-.blockTitle {
-  margin: 0;
-  font-size: 15px;
-  font-weight: 600;
-}
-
-.blockCaption {
-  margin: 6px 0 0;
-  font-size: 12px;
+.entryDesc {
+  margin: var(--space-2) 0 0;
+  max-width: 62ch;
+  font-size: var(--text-sm);
+  line-height: var(--leading-relaxed);
   color: var(--text-muted);
 }
 
-.blockList {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-  gap: 10px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.blockItem {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  padding: 14px;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  box-shadow: var(--shadow);
-}
-
-.blockName {
-  font-size: 14px;
-  font-weight: 600;
-}
-
-.blockDesc {
-  font-size: 12.5px;
-  line-height: 1.65;
-  color: var(--text-muted);
-}
+/* ---------------------------- 能力三卡 ---------------------------- */
 
 .grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-  gap: 16px;
-  margin-top: 28px;
+  gap: var(--space-4);
+  margin-top: var(--space-6);
   align-items: stretch;
 }
 
 .footer {
-  margin-top: 32px;
-  padding-top: 16px;
+  margin-top: var(--space-7);
+  padding-top: var(--space-4);
   border-top: 1px solid var(--border);
 }

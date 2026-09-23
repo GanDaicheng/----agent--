@@ -1,39 +1,116 @@
 /*
  * 全局设计令牌。
  *
- * 配色只服务一件事：让「业务 → 数据 → AI → 应用」这条分层链路一眼可辨。
- * 分层色只在总览页作为主要视觉，其余页面仅用状态色与中性色。
+ * 三层配色，各管一件事，不要混用：
+ * 1. 中性色 —— 页面底色、卡片、边框、文字。承担绝大部分视觉。
+ * 2. 主操作色（--primary）—— 全站唯一的「可以点这里」颜色：主按钮、链接、焦点环、当前导航项。
+ * 3. 语义状态色（success / warning / danger / info）—— 表达「好 / 注意 / 出错 / 提示」。
+ *
+ * 另有两组只用于「类别识别」、不用于表达的色：
+ * - 分层色（--layer-*）只在总览页的分层链路里出现，用来区分四个层级；
+ * - 建设状态色（--status-*）只表示模块的 done / building / planned。
+ * 它们刻意与语义色分开取值语义：一个模块「已建成」不叫「成功」，
+ * 一个模块「待接入」也不是「出错」。
  */
+
 :root {
-  /* 中性色 */
+  /* ---------------------------- 中性色 ---------------------------- */
   --bg: #f5f7fa;
   --surface: #ffffff;
   --surface-muted: #f8fafc;
+  --surface-sunken: #f1f5f9;
   --border: #e4e7ec;
   --border-strong: #d0d5dd;
   --text: #172033;
   --text-muted: #667085;
+  --text-subtle: #98a2b3;
 
-  /* 分层色 */
+  /* ------------------------- 主操作色 ------------------------- */
+  /* 与 --layer-business 同色系是有意的：导航高亮、链接、焦点环本来就是蓝的，
+     再引入第二个强调色只会让「哪个才是主操作」变得含糊。 */
+  --primary: #2563eb;
+  --primary-hover: #1d4ed8;
+  --primary-soft: #eff6ff;
+  --primary-border: #bfdbfe;
+  --primary-disabled: #a8c6f5;
+  --on-primary: #ffffff;
+
+  /* ------------------------ 语义状态色 ------------------------ */
+  /* 每族三档：主色（文字/图标）、-soft（底色）、-border（描边）。 */
+  --success: #067647;
+  --success-soft: #ecfdf3;
+  --success-border: #a6f4c5;
+
+  --warning: #b54708;
+  --warning-soft: #fffaeb;
+  --warning-border: #fec84b;
+
+  --danger: #b42318;
+  --danger-soft: #fef3f2;
+  --danger-border: #fda29b;
+
+  --info: #175cd3;
+  --info-soft: #eff8ff;
+  --info-border: #b2ddff;
+
+  /* -------------------------- 分层色 -------------------------- */
+  /* 只用于总览页的「业务 → 数据 → AI → 应用」链路，其它页面不用。 */
   --layer-source: #475569;
   --layer-business: #2563eb;
   --layer-data: #15803d;
   --layer-ai: #7c3aed;
   --layer-app: #0f3d8c;
 
-  /* 建设状态色，与分层色区分开，避免状态被误读为层级 */
-  --status-done: #16a34a;
-  --status-building: #d97706;
+  /* ----------------------- 建设状态色 ----------------------- */
+  /* 复用语义色的取值，但语义是「建设进度」，与 success/warning 不是一回事，
+     因此保留独立的名字，将来要单独调色也不必动语义色。 */
+  --status-done: var(--success);
+  --status-building: var(--warning);
   --status-planned: #64748b;
 
+  /* -------------------------- 间距标尺 -------------------------- */
+  /* 4 的倍数，够用即可。以前各页面手写 6/10/14/18/28 这类数字，
+     同一种卡片在三个页面是 18px、20px、20px，纯属漂移。 */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-7: 32px;
+  --space-8: 40px;
+
+  /* -------------------------- 字号标尺 -------------------------- */
+  --text-xs: 12px;
+  --text-sm: 13px;
+  --text-base: 14px;
+  --text-md: 15px;
+  --text-lg: 17px;
+  /* 页面主标题。以前同一个 h1 在两个页面是 26px、在另两个是 24px。 */
+  --text-title: 26px;
+
+  /* -------------------------- 字重/行高 -------------------------- */
+  --weight-normal: 400;
+  --weight-medium: 500;
+  --weight-semibold: 600;
+
+  --leading-tight: 1.35;
+  --leading-normal: 1.6;
+  --leading-relaxed: 1.75;
+
+  /* --------------------------- 形状 --------------------------- */
   --radius: 12px;
   --radius-sm: 8px;
+  --radius-pill: 999px;
   --shadow: 0 1px 2px rgba(16, 24, 40, 0.05);
   --shadow-lift: 0 6px 16px rgba(16, 24, 40, 0.08);
 
+  /* --------------------------- 布局 --------------------------- */
   --topbar-height: 60px;
   --sidebar-width: 248px;
+  --content-max: 1120px;
 
+  /* --------------------------- 字体 --------------------------- */
   --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI",
     "Microsoft YaHei", "PingFang SC", "Noto Sans SC", "Hiragino Sans GB",
     sans-serif;
@@ -54,7 +131,8 @@ body {
   background: var(--bg);
   color: var(--text);
   font-family: var(--font-sans);
-  line-height: 1.65;
+  font-size: var(--text-base);
+  line-height: var(--leading-normal);
   -webkit-font-smoothing: antialiased;
 }
 
@@ -63,16 +141,16 @@ h2,
 h3,
 h4 {
   color: var(--text);
-  line-height: 1.35;
+  line-height: var(--leading-tight);
 }
 
 a {
-  color: var(--layer-business);
+  color: var(--primary);
 }
 
 /* 键盘焦点必须清晰可见 */
 :focus-visible {
-  outline: 2px solid var(--layer-business);
+  outline: 2px solid var(--primary);
   outline-offset: 2px;
   border-radius: 4px;
 }
@@ -80,19 +158,19 @@ a {
 /* 跳转到主内容：仅键盘聚焦时出现 */
 .skipLink {
   position: absolute;
-  left: 12px;
+  left: var(--space-3);
   top: -48px;
   z-index: 100;
-  padding: 8px 14px;
+  padding: var(--space-2) var(--space-4);
   background: var(--surface);
   color: var(--text);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-sm);
-  font-size: 14px;
+  font-size: var(--text-base);
   text-decoration: none;
   transition: top 0.15s ease;
 }
 
 .skipLink:focus {
-  top: 12px;
+  top: var(--space-3);
 }

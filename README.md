@@ -1,7 +1,10 @@
-# 数据中台 Agent 智能问数工作台
+# AI 数据智能平台
 
-一个作品集级的数据中台 Agent 项目：用自然语言提问（例如“近六个月销售额趋势如何”），
-系统检索指标口径与数据目录、生成安全 SQL、查询数据仓库，最后返回结论与图表。
+一个作品集级的平台项目：用自然语言提问（例如“2025 年各月销售额趋势如何”），
+系统检索指标口径与数据目录、生成安全 SQL、查询数据仓库，最后返回结论与图表；
+另一条链路把业务文档切片向量化入库，回答口径与规则类问题。
+
+零售只是当前用来把链路跑通的演示业务，架构上可扩展到其他业务场景。
 
 ## 项目目标
 
@@ -20,9 +23,9 @@
 | 后端服务 | FastAPI + Uvicorn | 已接入 |
 | Agent 编排 | LangChain / LangGraph | 已接入 |
 | 模型接入 | OpenAI 兼容接口（DeepSeek / Qwen / OpenAI） | 已接入 |
-| 数据存储 | PostgreSQL 16 | 已接入，尚未创建零售业务表 |
-| 数据访问 | SQLAlchemy 2.x（异步）+ asyncpg | 已接入，目前仅连接自检 |
-| 前端工作台 | Next.js 16 + TypeScript（App Router） | 已容器化，尚未调用后端 API |
+| 数据存储 | PostgreSQL 16 + pgvector | 已接入：业务样例表与知识库向量表均已建出 |
+| 数据访问 | SQLAlchemy 2.x（异步）+ asyncpg | 已接入：受控只读查询与知识库读写都在用 |
+| 前端工作台 | Next.js 16 + React 19 + TypeScript（App Router） | 已接入：四个功能页，其中三个调用后端接口 |
 | 本地环境 | Docker Compose | 已接入：PostgreSQL + FastAPI + Next.js 三服务一键启动 |
 
 ## 目录结构
@@ -708,16 +711,34 @@ validate_sql → 已完成查询安全校验       repair_sql → 已尝试修�
 如果模型配置不可用，会返回 `status = error` 加一句受控说明，
 不会泄露配置内容。
 
-## 智能问数页面
+## 前端交互页面
 
-页面上线后可访问：
+三个页面会真实调用后端：
 
 ```text
-http://localhost:3000/applications/data-query
+http://localhost:3000/data/sources                   数据采集：上传知识文档、查看已入库列表
+http://localhost:3000/applications/knowledge-qa       知识问答：问业务口径，检索知识文档
+http://localhost:3000/applications/data-query         智能问数：自然语言提问，查业务数据
 ```
 
+三者共用同一套请求约定：首次打开不发请求、请求可取消、取消与失败分开展示、
+响应做结构校验、模型输出按纯文本渲染。下面以智能问数为例说明。
+
+另外两页不需要后端即可打开，内容全部来自前端静态配置：
+
+```text
+http://localhost:3000/data/warehouse                  数据仓库：五张样例表、表关系、数据入口
+http://localhost:3000/architecture                    技术栈与架构：技术栈、系统结构、数据流转
+http://localhost:3000/ai/agents                        Agent 中心：已跑通的问数流程
+http://localhost:3000/ai/knowledge                     知识库与 RAG：切片、向量化与检索
+```
+
+### 以智能问数为例
+
 输入一句中文问题，页面会调用 `POST /api/v1/agent/data-query`，展示分析结论、
-执行过程、明细表和图表建议。
+图表建议、明细表（含数据来源与行数）、可折叠的执行记录，以及需要时附带的
+知识库参考资料。样例数据覆盖 2025 全年，所以示例问题都写明了年份——
+问「最近六个月」在样例数据上查不到东西。
 
 ### 跨端启动（必须前后端同时在跑）
 
@@ -797,11 +818,28 @@ npm run start    # 以生产模式启动，需先 build
 
 ### 当前前端状态
 
-前端**已完成工程初始化并容器化**（见 `frontend/Dockerfile`），首页仍是占位页面。
-它目前**不会请求后端接口**，因此不需要先启动 FastAPI 或 PostgreSQL 也能正常打开。
+前端已完成工程初始化并容器化（见 `frontend/Dockerfile`），共有**三个会调用后端接口的
+交互页面**：
 
-尚未做的事（属于后续阶段）：调用后端接口、配置跨域（CORS）、聊天界面、
-图表展示。后端接口清单见本文档「本地启动后端」一节。
+| 页面 | 地址 | 调用的接口 |
+| --- | --- | --- |
+| 数据采集 | `/data/sources` | `POST` / `GET /api/v1/rag/documents` |
+| 知识问答 | `/applications/knowledge-qa` | `POST /api/v1/rag/answer` |
+| 智能问数 | `/applications/data-query` | `POST /api/v1/agent/data-query` |
+
+其余页面（数据仓库、技术栈与架构、Agent 中心、知识库与 RAG）都是**由前端静态配置
+渲染的说明页**，不请求接口，因此不启动后端也能正常打开。
+
+前端只保留已经真实可用的模块。业务中台四个中心、数据治理、指标中心、数据服务、
+模型与 Prompt、工作流与工具、AI 运营、经营驾驶舱都不在导航里——它们既没有实现，
+也不该有一个点进去空空如也的入口。
+
+这三个页面都**在首次打开时不发起任何请求**，只有用户点了按钮才会提交。
+
+顶栏的「检查服务」按钮会调用 `GET /api/v1/health`，只探测后端进程与数据库连接，
+**不自动轮询**；它不覆盖模型服务与 embedding 服务是否可用。
+
+前端自己的说明（设计令牌、目录结构、改造约定）见 `frontend/README.md`。
 
 ## 本地环境注意事项
 

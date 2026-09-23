@@ -1,0 +1,90 @@
+.health {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+  font-size: var(--text-xs);
+}
+
+.label {
+  color: var(--text-muted);
+}
+
+.state {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 2px var(--space-2);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-pill);
+  background: var(--surface-muted);
+  color: var(--text-muted);
+  font-weight: var(--weight-medium);
+  white-space: nowrap;
+}
+
+/* 状态点只是辅助，语义始终由文字承担 */
+.dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--border-strong);
+}
+
+.state[data-tone="ok"] {
+  border-color: var(--success-border);
+  background: var(--success-soft);
+  color: var(--success);
+}
+
+.state[data-tone="ok"] .dot {
+  background: var(--success);
+}
+
+.state[data-tone="warn"] {
+  border-color: var(--warning-border);
+  background: var(--warning-soft);
+  color: var(--warning);
+}
+
+.state[data-tone="warn"] .dot {
+  background: var(--warning);
+}
+
+.state[data-tone="bad"] {
+  border-color: var(--danger-border);
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.state[data-tone="bad"] .dot {
+  background: var(--danger);
+}
+
+.detail {
+  max-width: 42ch;
+  color: var(--text-muted);
+}
+
+.time {
+  color: var(--text-subtle);
+  font-family: var(--font-mono);
+  white-space: nowrap;
+}
+
+.action {
+  padding: 4px var(--space-3);
+  font-size: var(--text-xs);
+}
+
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}

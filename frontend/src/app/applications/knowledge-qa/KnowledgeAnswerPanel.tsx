@@ -1,6 +1,10 @@
-"use client";
-
-import type { RagAnswerResponse, RagAnswerStatus, RagSource } from "@/lib/api/rag-answer";
+import { LinkButton } from "@/components/ui/Button";
+import { Notice } from "@/components/ui/Notice";
+import type {
+  RagAnswerResponse,
+  RagAnswerStatus,
+  RagSource,
+} from "@/lib/api/rag-answer";
 
 import styles from "./knowledge-qa.module.css";
 
@@ -18,9 +22,16 @@ function meterWidth(similarity: number): string {
 /**
  * 非 ok 状态的提示。
  *
- * 「资料不足」和「知识库为空」都用琥珀色而不是红色：它们是**正常结果**，
- * 不是故障。把「诚实地说不知道」渲染成报警色，会让人误以为系统坏了，
+ * 两种都用琥珀色而不是红色：它们是**正常结果**，不是故障。
+ * 把「诚实地说不知道」渲染成报警色，会让人误以为系统坏了，
  * 进而去排查一个并不存在的问题。
+ *
+ * 两种的区别值得说清楚：
+ * - insufficient：确实检索到了资料，但不足以回答这个问题；
+ * - no_knowledge：这一条都没检索到。
+ *   这里**不说成「知识库是空的」**——那是一个更强的断言，而接口给出的只是
+ *   「本次没有检索到任何切片」，两种原因都会导致它：库里确实还没有文档，
+ *   或者文档都在但没有一段跟这个问题相关。所以两种情况都列出来，并给出下一步。
  */
 function NonAnswerNotice({
   status,
@@ -29,46 +40,63 @@ function NonAnswerNotice({
   status: Exclude<RagAnswerStatus, "ok">;
   answer: string;
 }) {
-  const tag = status === "insufficient" ? "资料不足" : "知识库为空";
+  if (status === "insufficient") {
+    return (
+      <Notice tone="warning" tag="资料不足">
+        {/* 文案来自后端，是它给的固定说明，不是模型自由发挥的 */}
+        <p className={styles.noticeText}>{answer}</p>
+        <p className={styles.noticeText}>
+          检索到了相关资料，但不足以回答这个问题。为了不编造，这里如实说明。
+          可以换个更贴近文档用词的说法再试。
+        </p>
+      </Notice>
+    );
+  }
 
   return (
-    <section className={styles.notice} data-tone={status} role="status">
-      <span className={styles.noticeTag}>{tag}</span>
-      <div>
-        {/* 文案来自后端，是它给的固定说明，不是模型自由发挥的 */}
-        <p style={{ margin: 0 }}>{answer}</p>
-        <p style={{ margin: "8px 0 0", fontSize: 13 }}>
-          {status === "insufficient"
-            ? "检索到了相关资料，但不足以回答这个问题。为了不编造，这里如实说明。可以换个更贴近文档用词的说法再试。"
-            : "知识库里还没有可检索的资料。请先运行知识文档入库脚本，再回来提问。"}
-        </p>
+    <Notice tone="warning" tag="没有检索到资料">
+      <p className={styles.noticeText}>{answer}</p>
+      <p className={styles.noticeText}>
+        本次没有检索到任何可用于回答的知识切片。常见原因有两个：
+        知识库里还没有相关文档，或者已有文档里没有一段与这个问题相关。
+        可以先去「数据采集」确认知识库里有哪些文档，再换个说法提问。
+      </p>
+      <div className={styles.noticeActions}>
+        <LinkButton href="/data/sources" variant="secondary">
+          去数据采集查看文档
+        </LinkButton>
       </div>
-    </section>
+    </Notice>
   );
 }
 
 /**
- * 来源列表。
+ * 检索参考资料列表。
  *
- * 每条来源展示三样东西，各有各的用途：
+ * 每条展示四样东西，各有各的用途：
  * - **命中片段预览**：切片原文的摘要（后端截到 120 字），用来判断「这条到底相不相关」；
  * - 小节与文档名：用来回原文里找；
+ * - 片段位置：同一份文档里的第几段；
  * - 相似度：用来横向比较这一批结果的相对好坏。
  *
  * 预览通常比回答本身更值得看——回答是模型的转述，预览才是原文。
  * 但它在外观上要**让位于回答**：淡色、小字、引文式的左边框，一眼看得出是从属信息。
  *
- * 还要说清楚：这些是**本次检索命中的资料**，不是「模型确认引用过的资料」。
- * 页面上的说明文字必须如实这么写——把「检索到的」说成「引用过的」，
- * 等于给一个没有依据的承诺，而用户会拿它当核对依据。
+ * 两句话必须写在标题下面，因为它们是这一块最容易被误读的地方：
+ * 1. 这些是**本次检索命中的资料**，不是「模型确认引用过的资料」；
+ * 2. 相似度是**检索排序用的相对分数**，不是答案正确率或置信度。
  */
 function SourceList({ sources }: { sources: RagSource[] }) {
   return (
     <div className={styles.sources}>
-      <h3 className={styles.cardTitle}>参考来源</h3>
+      <h3 className={styles.sourcesTitle}>检索参考资料</h3>
       <p className={styles.sourcesNote}>
-        按相关度从高到低排列，是本次检索命中的知识库小节（不代表模型逐条引用过）。
+        按检索相似度从高到低排列，是本次检索命中的知识库小节，不代表模型逐条引用过。
         片段为文档原文的截断摘录。
+      </p>
+      <p className={styles.sourcesNote}>
+        相似度表示片段与问题的接近程度，只用于比较同一批结果的相对好坏，
+        不是答案的正确率或置信度。
       </p>
 
       <ol className={styles.sourceList}>

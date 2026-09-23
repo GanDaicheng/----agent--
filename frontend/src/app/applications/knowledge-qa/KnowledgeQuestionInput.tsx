@@ -2,6 +2,7 @@
 
 import type { KeyboardEvent } from "react";
 
+import { Button } from "@/components/ui/Button";
 import {
   RAG_DEFAULT_TOP_K,
   RAG_MAX_TOP_K,
@@ -121,22 +122,16 @@ export function KnowledgeQuestionInput({
       </div>
 
       <div className={styles.actions}>
-        <button
-          type="button"
-          className={`${styles.button} ${styles.primary}`}
-          onClick={onSubmit}
-          disabled={!canSubmit}
-        >
+        <Button variant="primary" onClick={onSubmit} disabled={!canSubmit}>
           {busy ? "检索中…" : "提问"}
-        </button>
-        <button
-          type="button"
-          className={`${styles.button} ${styles.secondary}`}
+        </Button>
+        <Button
+          variant="secondary"
           onClick={onClear}
           disabled={busy || (value.length === 0 && trimmed.length === 0)}
         >
           清空
-        </button>
+        </Button>
       </div>
 
       <div className={styles.examples}>

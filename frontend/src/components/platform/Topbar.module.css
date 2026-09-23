@@ -3,8 +3,9 @@
   flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: 12px 20px;
-  padding: 10px 20px;
+  gap: var(--space-2) var(--space-5);
+  min-height: var(--topbar-height);
+  padding: var(--space-2) var(--space-5);
   background: var(--surface);
   border-bottom: 1px solid var(--border);
 }
@@ -12,13 +13,13 @@
 .left {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: var(--space-3);
   min-width: 0;
 }
 
 .brand {
-  font-size: 15px;
-  font-weight: 600;
+  font-size: var(--text-md);
+  font-weight: var(--weight-semibold);
   letter-spacing: 0.01em;
   white-space: nowrap;
 }
@@ -32,10 +33,10 @@
 .current {
   display: flex;
   align-items: baseline;
-  gap: 6px;
+  gap: var(--space-2);
   margin: 0;
   min-width: 0;
-  font-size: 13px;
+  font-size: var(--text-sm);
 }
 
 .currentLabel {
@@ -44,34 +45,10 @@
 
 .currentValue {
   color: var(--text);
-  font-weight: 500;
+  font-weight: var(--weight-medium);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.meta {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px 20px;
-  margin: 0;
-  font-size: 12px;
-}
-
-.metaItem {
-  display: flex;
-  align-items: baseline;
-  gap: 6px;
-}
-
-.metaItem dt {
-  color: var(--text-muted);
-}
-
-.metaItem dd {
-  margin: 0;
-  color: var(--text);
-  font-weight: 500;
 }
 
 .menuButton {
@@ -80,7 +57,7 @@
   justify-content: center;
   width: 32px;
   height: 32px;
-  font-size: 15px;
+  font-size: var(--text-md);
   color: var(--text);
   background: var(--surface);
   border: 1px solid var(--border-strong);
@@ -89,7 +66,8 @@
 }
 
 .menuButton:hover {
-  border-color: var(--text-muted);
+  border-color: var(--primary);
+  color: var(--primary);
 }
 
 /* 窄屏：主导航折叠为顶部按钮控制的下拉面板 */
@@ -99,7 +77,7 @@
   }
 
   .topbar {
-    padding: 10px 16px;
+    padding: var(--space-2) var(--space-4);
   }
 
   .divider {
@@ -109,14 +87,10 @@
 
 @media (max-width: 640px) {
   .brand {
-    font-size: 14px;
+    font-size: var(--text-base);
   }
 
   .currentLabel {
     display: none;
-  }
-
-  .meta {
-    width: 100%;
   }
 }

@@ -1,8 +1,8 @@
 .card {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  padding: 18px;
+  gap: var(--space-3);
+  padding: var(--space-5);
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -13,36 +13,37 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 10px;
+  gap: var(--space-3);
 }
 
 .title {
   margin: 0;
-  font-size: 15px;
-  font-weight: 600;
+  font-size: var(--text-md);
+  font-weight: var(--weight-semibold);
 }
 
 .caption {
   margin: 0;
-  font-size: 12px;
-  line-height: 1.6;
+  font-size: var(--text-xs);
+  line-height: var(--leading-normal);
   color: var(--text-muted);
 }
 
 .description {
   margin: 0;
-  font-size: 13px;
-  line-height: 1.7;
+  font-size: var(--text-sm);
+  line-height: var(--leading-relaxed);
   color: var(--text-muted);
 }
 
 .items {
   margin: 0;
-  padding-left: 18px;
+  padding-left: var(--space-5);
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  font-size: 13px;
+  gap: var(--space-2);
+  font-size: var(--text-sm);
+  line-height: var(--leading-normal);
   color: var(--text);
 }
 
@@ -54,16 +55,16 @@
   padding-left: 0;
   list-style: none;
   font-family: var(--font-mono);
-  font-size: 12.5px;
-  line-height: 1.7;
+  font-size: var(--text-xs);
+  line-height: var(--leading-relaxed);
   color: var(--text-muted);
   word-break: break-word;
 }
 
 .footer {
   margin-top: auto;
-  padding-top: 12px;
+  padding-top: var(--space-3);
   border-top: 1px solid var(--border);
-  font-size: 13px;
+  font-size: var(--text-sm);
   color: var(--text-muted);
 }

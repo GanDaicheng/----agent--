@@ -1,0 +1,116 @@
+/*
+ * 技术栈与架构页面的样式。
+ *
+ * 这一页是讲解性质的长页面，所以节奏和功能页不同：分节之间留白更大，
+ * 正文用可读行宽，架构图用深色面板作为整页的视觉重点。
+ * 站点整体仍是浅色——只有架构图那一块是深的。
+ */
+
+.page {
+  display: flex;
+  flex-direction: column;
+}
+
+.block {
+  margin-top: var(--space-7);
+}
+
+.blockHead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--space-2) var(--space-5);
+}
+
+.blockTitle {
+  margin: 0;
+  font-size: var(--text-lg);
+  font-weight: var(--weight-semibold);
+}
+
+.blockNote {
+  margin: var(--space-2) 0 0;
+  max-width: 74ch;
+  font-size: var(--text-sm);
+  line-height: var(--leading-relaxed);
+  color: var(--text-muted);
+}
+
+/* 图与文字之间统一用这个间隔，免得每处各写一个 margin */
+.diagramWrap {
+  margin-top: var(--space-5);
+}
+
+/* ---------------------------- 技术栈 ---------------------------- */
+
+.stackGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: var(--space-4);
+  margin: var(--space-5) 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.stackCard {
+  padding: var(--space-4);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+
+.stackGroup {
+  margin: 0 0 var(--space-3);
+  font-size: var(--text-base);
+  font-weight: var(--weight-semibold);
+  color: var(--text);
+}
+
+.stackItems {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.stackItem {
+  padding: 2px var(--space-2);
+  background: var(--surface-muted);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--text);
+  /* 长技术名（text-embedding-v4）不要撑破卡片 */
+  overflow-wrap: anywhere;
+}
+
+/* ---------------------------- 架构说明 ---------------------------- */
+
+.flowNote {
+  margin: var(--space-4) 0 0;
+  max-width: 74ch;
+  padding: var(--space-3) var(--space-4);
+  background: var(--surface-muted);
+  border-left: 3px solid var(--primary);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  font-size: var(--text-sm);
+  line-height: var(--leading-relaxed);
+  color: var(--text);
+}
+
+.flowNote strong {
+  font-weight: var(--weight-semibold);
+}
+
+.footer {
+  margin-top: var(--space-8);
+  padding-top: var(--space-5);
+  border-top: 1px solid var(--border);
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
