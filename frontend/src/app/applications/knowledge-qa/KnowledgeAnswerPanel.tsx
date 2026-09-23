@@ -1,0 +1,143 @@
+"use client";
+
+import type { RagAnswerResponse, RagAnswerStatus, RagSource } from "@/lib/api/rag-answer";
+
+import styles from "./knowledge-qa.module.css";
+
+/**
+ * 把余弦相似度夹到 [0, 1] 再当横条宽度。
+ *
+ * 余弦相似度的理论范围是 [-1, 1]：负数表示方向相反，此时横条长度应当是 0
+ * 而不是负宽度。夹一下既避免非法 CSS，也让「不相似」看起来就是不相似。
+ */
+function meterWidth(similarity: number): string {
+  const clamped = Math.max(0, Math.min(1, similarity));
+  return `${(clamped * 100).toFixed(1)}%`;
+}
+
+/**
+ * 非 ok 状态的提示。
+ *
+ * 「资料不足」和「知识库为空」都用琥珀色而不是红色：它们是**正常结果**，
+ * 不是故障。把「诚实地说不知道」渲染成报警色，会让人误以为系统坏了，
+ * 进而去排查一个并不存在的问题。
+ */
+function NonAnswerNotice({
+  status,
+  answer,
+}: {
+  status: Exclude<RagAnswerStatus, "ok">;
+  answer: string;
+}) {
+  const tag = status === "insufficient" ? "资料不足" : "知识库为空";
+
+  return (
+    <section className={styles.notice} data-tone={status} role="status">
+      <span className={styles.noticeTag}>{tag}</span>
+      <div>
+        {/* 文案来自后端，是它给的固定说明，不是模型自由发挥的 */}
+        <p style={{ margin: 0 }}>{answer}</p>
+        <p style={{ margin: "8px 0 0", fontSize: 13 }}>
+          {status === "insufficient"
+            ? "检索到了相关资料，但不足以回答这个问题。为了不编造，这里如实说明。可以换个更贴近文档用词的说法再试。"
+            : "知识库里还没有可检索的资料。请先运行知识文档入库脚本，再回来提问。"}
+        </p>
+      </div>
+    </section>
+  );
+}
+
+/**
+ * 来源列表。
+ *
+ * 每条来源展示三样东西，各有各的用途：
+ * - **命中片段预览**：切片原文的摘要（后端截到 120 字），用来判断「这条到底相不相关」；
+ * - 小节与文档名：用来回原文里找；
+ * - 相似度：用来横向比较这一批结果的相对好坏。
+ *
+ * 预览通常比回答本身更值得看——回答是模型的转述，预览才是原文。
+ * 但它在外观上要**让位于回答**：淡色、小字、引文式的左边框，一眼看得出是从属信息。
+ *
+ * 还要说清楚：这些是**本次检索命中的资料**，不是「模型确认引用过的资料」。
+ * 页面上的说明文字必须如实这么写——把「检索到的」说成「引用过的」，
+ * 等于给一个没有依据的承诺，而用户会拿它当核对依据。
+ */
+function SourceList({ sources }: { sources: RagSource[] }) {
+  return (
+    <div className={styles.sources}>
+      <h3 className={styles.cardTitle}>参考来源</h3>
+      <p className={styles.sourcesNote}>
+        按相关度从高到低排列，是本次检索命中的知识库小节（不代表模型逐条引用过）。
+        片段为文档原文的截断摘录。
+      </p>
+
+      <ol className={styles.sourceList}>
+        {sources.map((source, index) => (
+          <li key={`${source.source_file}-${source.chunk_index}`} className={styles.source}>
+            <div className={styles.sourceHead}>
+              <span className={styles.rank}>#{index + 1}</span>
+              <span className={styles.sectionTitle}>{source.section_title}</span>
+              <span className={styles.documentTitle}>{source.document_title}</span>
+            </div>
+
+            {/* 预览是可选字段：后端老版本没有它时整块不渲染，不留空框。
+                纯文本渲染，绝不按 HTML / Markdown 执行 */}
+            {source.preview ? (
+              <p className={styles.preview} title="检索命中的文档原文（已截断）">
+                {source.preview}
+              </p>
+            ) : null}
+
+            <div className={styles.sourceMeta}>
+              <span className={styles.fileName}>{source.source_file}</span>
+              <span className={styles.chunkIndex}>第 {source.chunk_index} 段</span>
+              <span
+                className={styles.similarity}
+                title={`余弦距离 ${source.distance.toFixed(4)}（越小越相似）`}
+              >
+                相似度
+                <span className={styles.meter} aria-hidden="true">
+                  <span
+                    className={styles.meterFill}
+                    style={{ width: meterWidth(source.similarity) }}
+                  />
+                </span>
+                <span className={styles.similarityValue}>
+                  {source.similarity.toFixed(4)}
+                </span>
+              </span>
+            </div>
+          </li>
+        ))}
+      </ol>
+    </div>
+  );
+}
+
+/**
+ * 回答面板：按 status 决定渲染什么。
+ *
+ * status 是后端给的三种取值，页面**不看别的字段去猜**。
+ * 这样后端调整检索策略时，页面不需要跟着改判断逻辑。
+ */
+export function KnowledgeAnswerPanel({ result }: { result: RagAnswerResponse }) {
+  if (result.status !== "ok") {
+    return <NonAnswerNotice status={result.status} answer={result.answer} />;
+  }
+
+  return (
+    <section className={styles.card} aria-labelledby="kq-answer-heading">
+      <h2 id="kq-answer-heading" className={styles.cardTitle}>
+        知识库回答
+      </h2>
+      <p className={styles.cardCaption}>
+        由模型依据下方检索到的知识文档生成，只复述文档里写过的内容。
+      </p>
+
+      {/* 纯文本渲染：保留换行，但绝不按 HTML / Markdown 执行 */}
+      <p className={styles.answerText}>{result.answer}</p>
+
+      {result.sources.length > 0 ? <SourceList sources={result.sources} /> : null}
+    </section>
+  );
+}

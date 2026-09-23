@@ -12,7 +12,7 @@ const SECTION_ID = "applications";
  * 构建产物里出现两份 /applications/data-query。静态路由优先，
  * 所以访问结果是对的，但那份额外的产物纯属浪费且容易让人误解。
  */
-const STATIC_ROUTE_SLUGS = new Set(["data-query"]);
+const STATIC_ROUTE_SLUGS = new Set(["data-query", "knowledge-qa"]);
 
 export function generateStaticParams() {
   return (getSection(SECTION_ID)?.modules ?? [])

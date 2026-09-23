@@ -1,0 +1,570 @@
+/*
+ * 知识库问答页面的样式。
+ *
+ * 沿用全局设计令牌（globals.css），局部用 AI 中台的紫色作为强调色——
+ * 这个页面属于智能应用层，但背后的能力（embedding + 检索 + 模型）来自 AI 中台。
+ *
+ * 状态一律「颜色 + 文字」双重表达：色盲用户和黑白打印下也必须分得清
+ * 「答不出来」「出错」「还没问」。这一点对本页尤其重要——
+ * 「资料不足」是正常结果而不是故障，视觉上不能和红色报错混成一种。
+ */
+
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+
+  /* 本地语义色。全局令牌里没有这几组，它们只在少数页面用到，不值得污染全局。 */
+  --kq-accent: var(--layer-ai);
+  --kq-accent-soft: #f5f3ff;
+  --kq-danger: #b42318;
+  --kq-danger-soft: #fef3f2;
+  --kq-danger-border: #fda29b;
+  --kq-muted-soft: #f1f5f9;
+  /* 「资料不足」用琥珀色：它不是错误，是「诚实地说不知道」 */
+  --kq-warn: #b54708;
+  --kq-warn-soft: #fffaeb;
+  --kq-warn-border: #fec84b;
+}
+
+/* ------------------------------- 页头 ------------------------------- */
+
+.breadcrumb {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 16px;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.breadcrumb a {
+  color: var(--text-muted);
+  text-decoration: none;
+}
+
+.breadcrumb a:hover {
+  color: var(--kq-accent);
+  text-decoration: underline;
+}
+
+.sep {
+  color: var(--border-strong);
+}
+
+.header {
+  padding-bottom: 18px;
+  margin-bottom: 20px;
+  border-bottom: 1px solid var(--border);
+}
+
+.titleRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+
+.title {
+  margin: 0;
+  font-size: 24px;
+  font-weight: 650;
+  color: var(--text);
+}
+
+.subtitle {
+  margin: 8px 0 0;
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--text-muted);
+}
+
+.boundary {
+  display: flex;
+  gap: 12px;
+  margin-top: 16px;
+  padding: 12px 14px;
+  background: var(--kq-accent-soft);
+  border: 1px solid #ddd6fe;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text);
+}
+
+.boundaryTag {
+  flex: none;
+  align-self: flex-start;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--kq-accent);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+/* ------------------------------- 卡片 ------------------------------- */
+
+.card {
+  padding: 20px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+
+.cardTitle {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 650;
+  color: var(--text);
+}
+
+.cardCaption {
+  margin: 6px 0 16px;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text-muted);
+}
+
+/* ------------------------------- 输入区 ------------------------------- */
+
+.hint {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.textarea {
+  width: 100%;
+  min-height: 88px;
+  padding: 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  font-family: inherit;
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--text);
+  background: var(--surface);
+  resize: vertical;
+}
+
+.textarea:focus {
+  outline: 2px solid var(--kq-accent);
+  outline-offset: 1px;
+  border-color: var(--kq-accent);
+}
+
+.textarea:disabled {
+  background: var(--surface-muted);
+  color: var(--text-muted);
+}
+
+.inputMeta {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.counter[data-over="true"] {
+  color: var(--kq-danger);
+  font-weight: 600;
+}
+
+.validation {
+  margin: 8px 0 0;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--kq-danger-soft);
+  border: 1px solid var(--kq-danger-border);
+  font-size: 13px;
+  color: var(--kq-danger);
+}
+
+/* top_k 选择器 */
+
+.options {
+  margin-top: 14px;
+}
+
+.select {
+  padding: 6px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  font-family: inherit;
+  font-size: 14px;
+  color: var(--text);
+  background: var(--surface);
+}
+
+.select:disabled {
+  background: var(--surface-muted);
+  color: var(--text-muted);
+}
+
+.optionNote {
+  margin: 6px 0 0;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-muted);
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.button {
+  padding: 9px 18px;
+  border-radius: var(--radius-sm);
+  border: 1px solid transparent;
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.primary {
+  background: var(--kq-accent);
+  border-color: var(--kq-accent);
+  color: #fff;
+}
+
+.secondary {
+  background: var(--surface);
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+
+.secondary:disabled {
+  opacity: 0.5;
+}
+
+/* 示例问题 */
+
+.examples {
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+
+.examplesLabel {
+  margin: 0 0 10px;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.exampleList {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.example {
+  padding: 7px 12px;
+  border: 1px dashed var(--border-strong);
+  border-radius: 999px;
+  background: var(--surface-muted);
+  font-family: inherit;
+  font-size: 13px;
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+}
+
+.example:hover:not(:disabled) {
+  border-color: var(--kq-accent);
+  color: var(--kq-accent);
+  background: var(--kq-accent-soft);
+}
+
+.example:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+/* ------------------------------- 状态提示 ------------------------------- */
+
+.notice {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 14px 16px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  font-size: 14px;
+  line-height: 1.65;
+  color: var(--text);
+}
+
+.noticeTag {
+  flex: none;
+  align-self: flex-start;
+  padding: 2px 9px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  background: var(--kq-muted-soft);
+  color: var(--text-muted);
+}
+
+/* 出错：红色 */
+.notice[data-tone="error"] {
+  background: var(--kq-danger-soft);
+  border-color: var(--kq-danger-border);
+  color: var(--kq-danger);
+}
+
+.notice[data-tone="error"] .noticeTag {
+  background: var(--kq-danger);
+  color: #fff;
+}
+
+/* 资料不足 / 知识库为空：琥珀色，与报错区分开 */
+.notice[data-tone="insufficient"],
+.notice[data-tone="no_knowledge"] {
+  background: var(--kq-warn-soft);
+  border-color: var(--kq-warn-border);
+}
+
+.notice[data-tone="insufficient"] .noticeTag,
+.notice[data-tone="no_knowledge"] .noticeTag {
+  background: var(--kq-warn);
+  color: #fff;
+}
+
+/* 已取消：中性灰，不是错误 */
+.notice[data-tone="cancelled"] {
+  background: var(--muted-soft, var(--kq-muted-soft));
+}
+
+/* 加载中 */
+
+.loading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  font-size: 14px;
+  color: var(--text-muted);
+}
+
+.spinner {
+  width: 16px;
+  height: 16px;
+  border: 2px solid var(--border-strong);
+  border-top-color: var(--kq-accent);
+  border-radius: 50%;
+  animation: kq-spin 0.8s linear infinite;
+}
+
+@keyframes kq-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* 尊重「减少动态效果」的系统设置 */
+@media (prefers-reduced-motion: reduce) {
+  .spinner {
+    animation: none;
+  }
+}
+
+/* ------------------------------- 回答 ------------------------------- */
+
+.answerText {
+  margin: 0;
+  /* 保留换行，但绝不按 HTML / Markdown 执行 */
+  white-space: pre-wrap;
+  font-size: 15px;
+  line-height: 1.75;
+  color: var(--text);
+}
+
+/* ------------------------------- 来源 ------------------------------- */
+
+.sources {
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+
+.sourcesNote {
+  margin: 6px 0 14px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-muted);
+}
+
+.sourceList {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  counter-reset: kq-source;
+}
+
+.source {
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-muted);
+}
+
+.sourceHead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.rank {
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--kq-accent);
+}
+
+.sectionTitle {
+  font-size: 14px;
+  font-weight: 650;
+  color: var(--text);
+}
+
+.documentTitle {
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+/*
+ * 命中片段预览。
+ *
+ * 定位是「原文摘录」，所以用引文式的左边框 + 淡色小字：
+ * 一眼看得出是从属信息，不会和上面的回答正文抢注意力。
+ * 预览通常比回答更值得看（回答是转述、预览是原文），
+ * 但视觉层级上仍然要让位于回答。
+ */
+.preview {
+  margin: 10px 0 0;
+  padding: 8px 12px;
+  border-left: 3px solid var(--border-strong);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  background: var(--surface);
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--text-muted);
+}
+
+.sourceMeta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.fileName {
+  font-family: var(--font-mono);
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+}
+
+.chunkIndex {
+  font-family: var(--font-mono);
+}
+
+/* 相似度：数字 + 一条细横条，让排序一眼看得出来 */
+.similarity {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.meter {
+  width: 72px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--border);
+  overflow: hidden;
+}
+
+.meterFill {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: var(--kq-accent);
+}
+
+.similarityValue {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text);
+}
+
+/* ------------------------------- 初始态 ------------------------------- */
+
+.empty {
+  padding: 28px 20px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--surface-muted);
+  text-align: center;
+}
+
+.emptyTitle {
+  margin: 0 0 6px;
+  font-size: 15px;
+  font-weight: 650;
+  color: var(--text);
+}
+
+.emptyText {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--text-muted);
+}
+
+/* 窄屏：相似度的横条换行，不要挤在一行里 */
+@media (max-width: 560px) {
+  .similarity {
+    margin-left: 0;
+    width: 100%;
+  }
+
+  .meter {
+    flex: 1;
+  }
+}

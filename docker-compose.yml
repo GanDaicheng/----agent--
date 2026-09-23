@@ -23,7 +23,10 @@ services:
   # backend 容器通过 Compose 服务名 postgres 直连数据库；
   # 容器内部不能使用 localhost 访问 PostgreSQL。
   postgres:
-    image: postgres:16-alpine
+    # 用 pgvector 官方镜像：RAG 需要 vector 扩展，官方 postgres 镜像不带它
+    # （pg_extension 和 pg_available_extensions 里都查不到 vector）。
+    # 该 tag 只有 Debian 变体，没有 Alpine 版；PG 大版本仍是 16，数据靠逻辑备份迁移。
+    image: pgvector/pgvector:0.8.6-pg16-bookworm
     restart: unless-stopped
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-data_platform}
@@ -33,8 +36,11 @@ services:
       # 宿主机 5432 -> 容器 5432，本机用 localhost:5432 直连
       - "5432:5432"
     volumes:
-      # 具名 volume：容器删了数据还在，只有 down -v 才会清空
-      - postgres_data:/var/lib/postgresql/data
+      # 具名 volume：容器删了数据还在，只有 down -v 才会清空。
+      # 这里挂到新卷 postgres_data_pgvector，让新镜像在空卷上重新 initdb，
+      # 避开 Alpine(musl) → Debian(glibc) 的排序规则隐患；
+      # 旧的 postgres_data 原样保留，作为回滚点，不删。
+      - postgres_data_pgvector:/var/lib/postgresql/data
     healthcheck:
       # pg_isready 返回 0 表示已能接受连接
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-data_platform} -d ${POSTGRES_DB:-data_platform}"]
@@ -57,6 +63,15 @@ services:
       OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.deepseek.com/v1}
       MODEL_NAME: ${MODEL_NAME:-deepseek-chat}
       TEMPERATURE: ${TEMPERATURE:-0.0}
+      # RAG 用的 embedding 配置，同样透传。**这几行不能省**：
+      # 容器里没有 .env（它在 .dockerignore 里被排除），配置只能靠这里注入。
+      # 漏了它们的表现是「本地脚本跑得通、容器里接口 500」——
+      # 因为 app/core/config.py 读不到值，require_embedding_settings() 会抛配置错误。
+      EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-dashscope}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-text-embedding-v4}
+      EMBEDDING_DIMENSION: ${EMBEDDING_DIMENSION:-1024}
+      EMBEDDING_API_KEY: ${EMBEDDING_API_KEY:-}
+      EMBEDDING_BASE_URL: ${EMBEDDING_BASE_URL:-https://dashscope.aliyuncs.com/compatible-mode/v1}
       # 关键：容器内的数据库主机名必须是服务名 postgres。
       # 用 DATABASE_URL_DOCKER（主机名 postgres），不能用 DATABASE_URL
       # （主机名 localhost）——容器里的 localhost 指的是容器自己，不是宿主机。
@@ -103,4 +118,7 @@ services:
       start_period: 20s
 
 volumes:
+  # 旧卷：Alpine 时期的数据。切换后不再挂载，但保留作为回滚点，不删。
   postgres_data:
+  # 新卷：pgvector 镜像使用，数据由 pg_dump / pg_restore 逻辑迁移而来。
+  postgres_data_pgvector:

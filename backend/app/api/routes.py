@@ -4,6 +4,7 @@ from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Response
 from pydantic import BaseModel, Field, ValidationError, field_validator
+from sqlalchemy.exc import SQLAlchemyError
 
 from app.agent.data_query.constants import (
     NODE_DISCOVER_ASSETS,
@@ -21,6 +22,8 @@ from app.agent.data_query.graph import get_data_query_graph
 from app.agent.graph import run_agent
 from app.core.exceptions import ConfigurationError
 from app.services.database_health import check_database
+from app.services.knowledge_search import DEFAULT_TOP_K, MAX_TOP_K, MIN_TOP_K
+from app.services.rag_answer import answer_from_knowledge
 from app.services.safe_query import (
     MAX_SQL_LENGTH,
     DatabaseUnavailableError,
@@ -513,3 +516,154 @@ async def agent_data_query(req: AgentDataQueryRequest) -> AgentDataQueryResponse
         # 契约异常的信息都是固定文案，可以直接进日志
         logger.warning("智能问数结果不符合公开契约：%s", exc)
         raise HTTPException(status_code=500, detail=AGENT_UNAVAILABLE_DETAIL) from exc
+
+
+RAG_UNAVAILABLE_DETAIL = "知识库问答服务暂时不可用，请稍后重试。"
+RAG_KNOWLEDGE_UNAVAILABLE_DETAIL = "知识库暂时不可用，请稍后重试。"
+
+
+class RagAnswerRequest(BaseModel):
+    """知识库问答请求。
+
+    只收 question 和 top_k。检索结果、拼好的上下文、模型的原始草稿
+    都不在这个模型里，客户端因此无从注入。
+
+    同样是本地开发原型：没有身份认证，也没有按用户的配额。
+    """
+
+    question: str = Field(
+        min_length=1,
+        # 与智能问数共用同一个上限。两者都是「一句自然语言问题」，
+        # 分别设两个数字只会让它们慢慢漂开。
+        max_length=AGENT_QUESTION_MAX_LENGTH,
+        description="用户的自然语言问题。",
+    )
+    top_k: int = Field(
+        default=DEFAULT_TOP_K,
+        # 边界直接引用检索层的常量，不在这里重写一遍数字：
+        # 上面 422、下面再报一次错的两套校验一旦数值不同，
+        # 就会出现「接口放行、服务报错」这种很难解释的现象。
+        ge=MIN_TOP_K,
+        le=MAX_TOP_K,
+        description=f"检索多少条资料作为回答依据，取值 {MIN_TOP_K}~{MAX_TOP_K}。",
+    )
+
+    @field_validator("question", mode="after")
+    @classmethod
+    def _strip_question(cls, value: str) -> str:
+        """去掉首尾空白；纯空白视为非法输入。
+
+        和智能问数一样放在校验器里：纯空白必须在进入业务逻辑**之前**被挡掉，
+        否则会一路走到检索、甚至走到模型才失败，白白花掉一次调用。
+        """
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("问题不能为空白。")
+        return stripped
+
+
+class RagSourceResponse(BaseModel):
+    """回答所依据的一条资料。
+
+    有意不含 chunk_id / document_id：那是数据库内部主键，
+    对外只需要「哪份文档的哪一节」这个程度的信息。
+
+    preview 是检索命中的切片正文摘要（后端截到 120 字），
+    **不是模型生成的**——来源必须能追溯到库里真实存在的文字，
+    用户才核对得了「这条来源到底写了什么」。正文为空时是空字符串。
+    """
+
+    source_file: str
+    document_title: str
+    section_title: str
+    chunk_index: int
+    preview: str
+    distance: float
+    similarity: float
+
+
+class RagAnswerResponse(BaseModel):
+    """知识库问答的对外响应。
+
+    status 的三种取值对应三类完全不同的处境：
+    - "ok"           ：资料足够，answer 是基于资料的回答；
+    - "insufficient" ：检索到了资料但不足以回答，answer 是固定文案；
+    - "no_knowledge" ：一条资料都没检索到（知识库为空或尚未入库）。
+
+    三种都是 HTTP 200：能给出一个安全、完整的回答，就说明服务本身是好的。
+    后两种不是故障，是「诚实地说不知道」——这正是这一步最该守住的行为。
+
+    sources 是**本次检索命中的资料**，不是「模型确认引用过的资料」。
+    后两种状态下一律为空：模型已经判定这些资料不足以作答，
+    再列出来会让用户误以为它们就是依据。
+    """
+
+    status: Literal["ok", "insufficient", "no_knowledge"]
+    answer: str
+    sources: list[RagSourceResponse]
+
+
+@router.post(
+    "/api/v1/rag/answer",
+    response_model=RagAnswerResponse,
+    responses={
+        500: {"description": RAG_UNAVAILABLE_DETAIL},
+        503: {"description": RAG_KNOWLEDGE_UNAVAILABLE_DETAIL},
+    },
+)
+async def rag_answer(req: RagAnswerRequest) -> RagAnswerResponse:
+    """基于知识库回答用户问题（RAG）。
+
+    路由只做三件事：接参数、调服务、把结果转成响应模型。
+    它不检索、不拼上下文、不调模型——那些都在 app/services/rag_answer.py 里，
+    路由重复一遍只会多出一份会走样的副本。
+
+    与 /api/v1/agent/data-query 的区别：那条走「查数据库算数」，
+    这条走「查知识库问文档」。两者回答的是不同性质的问题，
+    所以是两条独立的链路，本阶段刻意不并入 Agent 图。
+
+    状态码约定：
+    - 200：给出了回答，**包含 insufficient 和 no_knowledge**——
+          那是一个安全的、可展示的业务结果，不是 HTTP 层故障。
+    - 422：请求体不合法（缺 question、纯空白、top_k 越界）。
+    - 503：数据库/知识库连不上。
+    - 500：配置未就绪（模型或 embedding 的 Key 缺失），或其它内部异常。
+
+    错误响应只回显固定文案，绝不带问题原文、检索内容、连接串或异常原文。
+    """
+    try:
+        result = await answer_from_knowledge(req.question, top_k=req.top_k)
+    except ConfigurationError as exc:
+        # 配置类异常的文案是**按不含密钥设计的**（只点名缺哪个变量），
+        # 所以这里可以记原文——否则「缺 Key」只会留下一个光秃秃的类名，
+        # 排查时完全不知道该补哪个变量。
+        logger.warning("知识库问答配置未就绪：%s", exc)
+        raise HTTPException(status_code=500, detail=RAG_UNAVAILABLE_DETAIL) from exc
+    except SQLAlchemyError as exc:
+        # 数据库类异常原文可能带着连接串（含密码），只记类型
+        logger.warning("知识库不可用：%s", type(exc).__name__)
+        raise HTTPException(
+            status_code=503, detail=RAG_KNOWLEDGE_UNAVAILABLE_DETAIL
+        ) from exc
+    except Exception as exc:  # noqa: BLE001
+        # 模型 SDK 的异常原文同样可能带请求细节，只记类型。
+        # 也不记 req.question —— 用户问题属于用户数据，不进普通日志。
+        logger.warning("知识库问答失败：%s", type(exc).__name__)
+        raise HTTPException(status_code=500, detail=RAG_UNAVAILABLE_DETAIL) from exc
+
+    return RagAnswerResponse(
+        status=result.status,
+        answer=result.answer,
+        sources=[
+            RagSourceResponse(
+                source_file=source.source_file,
+                document_title=source.document_title,
+                section_title=source.section_title,
+                chunk_index=source.chunk_index,
+                preview=source.preview,
+                distance=source.distance,
+                similarity=source.similarity,
+            )
+            for source in result.sources
+        ],
+    )

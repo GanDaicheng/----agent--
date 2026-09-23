@@ -5,14 +5,24 @@ Alembic 的 env.py 只导入本包，因此新增模型后必须在这里登记�
 """
 
 from app.models.base import Base
+from app.models.knowledge import (
+    KNOWLEDGE_EMBEDDING_DIMENSIONS,
+    KnowledgeChunk,
+    KnowledgeDocument,
+    Vector,
+)
 from app.models.retail import MEMBER_LEVELS, Customer, DateDim, Order, Product, Region
 
 __all__ = [
+    "KNOWLEDGE_EMBEDDING_DIMENSIONS",
     "Base",
-    "MEMBER_LEVELS",
     "Customer",
     "DateDim",
+    "KnowledgeChunk",
+    "KnowledgeDocument",
+    "MEMBER_LEVELS",
     "Order",
     "Product",
     "Region",
+    "Vector",
 ]

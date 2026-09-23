@@ -821,6 +821,11 @@ npm run start    # 以生产模式启动，需先 build
 
   两个变量都写在项目根目录的 `.env` 里，`.env.example` 只提供不含真实密钥的示例值。
   `.env` 已被 `.gitignore` 忽略，请勿提交。
+- embedding（RAG 用）与对话模型**分开配置**，走 `EMBEDDING_*` 五个变量，默认指向
+  阿里云百炼的 OpenAI 兼容模式（`text-embedding-v4`）。`EMBEDDING_DIMENSION`
+  必须同时与 `EMBEDDING_MODEL` 的实际输出维度和 pgvector 建表时的 `vector(N)` 一致，
+  改任一处都要同步改另外两处，否则会在入库或建索引时才报错。
+  配置是否调得通，用 `python backend/scripts/smoke_embedding.py` 验证。
 
 ## 开发路线
 

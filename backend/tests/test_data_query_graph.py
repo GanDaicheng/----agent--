@@ -112,6 +112,7 @@ from app.agent.data_query.visualization import (
     FALLBACK_CHART,
     suggest_chart,
 )
+from app.models import MEMBER_LEVELS, Base
 
 QUESTION = "华东地区近六个月销售额趋势怎么样"
 
@@ -1029,6 +1030,42 @@ def test_orders_dataset_declares_fields_the_metrics_depend_on():
         "quantity",
         "net_amount",
     } <= set(fields)
+
+
+def test_catalog_fields_all_exist_in_models():
+    """目录登记的每个表名、字段名都必须在真实 ORM 模型里存在。
+
+    这里刻意用「目录字段 ⊆ 模型字段」而不是「相等」：目录是人工维护的受控清单，
+    允许只登记模型的一个子集（取舍同 safe_query.ALLOWED_COLUMNS），
+    但子集里的每一项都必须真实存在。
+
+    为什么值得单独立一条测试？目录字段名同时喂给 SQL 生成 Prompt 和 sql_validation
+    的白名单。名字写错时，模型照着错名字写、校验层又按同一份错名单放行，
+    要到 safe_query 才报「未授权」——报错位置离病根很远，很难定位。
+    """
+    models = {table.name: set(table.c.keys()) for table in Base.metadata.tables.values()}
+
+    for dataset in DATASETS:
+        assert dataset["name"] in models, f"目录登记了模型里不存在的表：{dataset['name']}"
+        unknown = sorted(set(dataset["fields"]) - models[dataset["name"]])
+        assert not unknown, f"{dataset['name']} 登记了模型里不存在的字段：{unknown}"
+
+
+def test_catalog_member_level_description_matches_the_real_enum():
+    """会员等级说明必须与 MEMBER_LEVELS 一致，且不得出现不存在的等级名。
+
+    「钻石会员」这类不存在的等级名写进目录后会顺着 Prompt 变成
+    `WHERE member_level = '钻石会员'`，查出来永远是空集——一个会静默出错的坑。
+    """
+    fields = next(d for d in DATASETS if d["name"] == "customers")["fields"]
+    description = fields["member_level"]
+
+    for level in MEMBER_LEVELS:
+        assert level in description, f"会员等级说明里缺少真实枚举：{level}"
+
+    # 历史上出现过的错误写法，写死在这里防止回归
+    for stale in ("钻石", "白银", "黄金"):
+        assert stale not in description, f"会员等级说明里出现了不存在的等级：{stale}"
 
 
 # ---------------------------- 检索工具 ----------------------------

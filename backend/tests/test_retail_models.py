@@ -11,6 +11,11 @@ from app.models.retail import MEMBER_LEVELS, Customer, DateDim, Order, Product, 
 
 EXPECTED_TABLES = {"customers", "products", "regions", "date_dim", "orders"}
 
+# RAG 阶段新增的两张知识库表。它们由 tests/test_knowledge_models.py 专门覆盖，
+# 这里登记一份是为了让「表集合」这条断言保持完整——
+# 任何新表都必须在这里显式登记一次，加表就成了有意识的行为。
+KNOWLEDGE_TABLES = {"knowledge_documents", "knowledge_chunks"}
+
 # 任务书要求显式定义的索引，缺一不可。
 # date_dim.full_date 不在这个集合里：它以 UNIQUE 约束的形式声明，
 # 而 PostgreSQL 的 UNIQUE 约束本身就是靠唯一索引实现的（见文件末尾的专项测试）。
@@ -71,8 +76,16 @@ def _all_columns():
             yield table.name, column.name
 
 
-def test_metadata_contains_exactly_the_five_target_tables():
-    assert set(Base.metadata.tables) == EXPECTED_TABLES
+def test_metadata_contains_exactly_the_expected_tables():
+    """metadata 里只应有零售 5 张表 + 知识库 2 张表。
+
+    这条断言的价值是「新增表必须经过一次有意识的登记」：多出任何一张表都会失败，
+    逼着加表的人回来想清楚它属于哪一类。
+
+    原名叫 test_metadata_contains_exactly_the_five_target_tables——RAG 阶段加了
+    知识库表之后，名字里的「五张」已经和断言对不上了，所以连同断言一起改掉。
+    """
+    assert set(Base.metadata.tables) == EXPECTED_TABLES | KNOWLEDGE_TABLES
 
 
 def test_every_table_has_a_primary_key():

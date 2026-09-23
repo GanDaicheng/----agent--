@@ -298,7 +298,7 @@ const AI: PlatformSection = {
   duty: "统一模型、知识、工具、工作流和 Agent 能力",
   status: "building",
   statusNote:
-    "核心 Agent 已完成受控问数流程：问题理解、资产发现、SQL 生成与安全校验、模拟查询、结果解释、图表建议；模型管理、知识库、工作流与 AI 运营仍待接入。",
+    "核心 Agent 已完成受控问数流程：问题理解、资产发现、SQL 生成与安全校验、模拟查询、结果解释、图表建议；知识库与 RAG 检索已建成并接入知识问答页面（尚未接入 Agent）；模型管理、工作流与 AI 运营仍待接入。",
   entry: "/ai/agents",
   entryLabel: "进入 Agent 中心",
   modules: [
@@ -324,18 +324,22 @@ const AI: PlatformSection = {
       slug: "knowledge",
       name: "知识库与 RAG",
       summary: "把业务文档与指标口径沉淀为可检索的知识，供 Agent 引用。",
-      status: "planned",
-      notice: "知识库与检索链路均未建立，Agent 当前不检索任何文档。",
+      status: "building",
+      notice:
+        "知识库、检索与回答链路均已跑通，并已接入知识问答页面；尚未接入 Agent 工作流，也没有文档上传与知识库管理界面。",
       current: [
-        "没有文档接入与切分流程",
-        "没有向量化与检索能力",
+        "5 份零售知识文档已按二级标题切片（44 个切片）并向量化入库（vector(1024)）",
+        "pgvector 余弦距离检索已接通，回答附带命中的文档、小节与原文片段",
+        "RAG 回答接口 POST /api/v1/rag/answer 与知识问答页面均已完成",
+        "资料不足时明确说明「没有足够信息」，不用模型自身知识补全",
       ],
       upcoming: [
-        "文档接入与切分",
-        "向量化与相似度检索",
-        "检索结果作为 Agent 生成 SQL 的依据",
+        "文档上传与知识库管理（增量更新、删除、重建）",
+        "接入 LangGraph Agent，供资产发现环节检索业务口径",
+        "与智能问数联合推理：数字以数据中台为准，知识库负责解释口径与原因",
+        "检索质量评测与引用检测（区分「检索到」与「实际引用」）",
       ],
-      dependencies: ["知识库 → RAG 检索 → Agent 中心"],
+      dependencies: ["知识库 → RAG 检索 → 知识问答应用 / Agent 中心"],
     },
     {
       slug: "agents",
@@ -413,7 +417,7 @@ const APPLICATIONS: PlatformSection = {
   duty: "将数据和 AI 能力交付给业务人员",
   status: "building",
   statusNote:
-    "智能问数已可交互（基于零售样例数据，未接入生产数据）；经营驾驶舱与数据权限尚未建立。",
+    "智能问数（查业务数据）与知识问答（查知识文档）均已可交互，都基于本地样例；经营驾驶舱与数据权限尚未建立。",
   entry: "/applications/dashboard",
   entryLabel: "进入经营驾驶舱",
   modules: [
@@ -454,6 +458,27 @@ const APPLICATIONS: PlatformSection = {
         "多轮追问与会话记忆",
       ],
       dependencies: ["Agent 中心 + 数据服务 → 智能问数应用"],
+    },
+    {
+      slug: "knowledge-qa",
+      name: "知识问答",
+      summary: "针对业务口径与规则类问题，检索知识库并给出带来源的回答。",
+      status: "done",
+      notice:
+        "基于本地 5 份零售知识文档（44 个知识切片）；每次提问会调用 embedding 与模型服务；检索与生成尚未做人工评测，也未接入企业真实文档。",
+      current: [
+        "知识文档按二级标题切片并向量化入库，用 pgvector 余弦距离检索",
+        "回答只依据检索到的知识库资料；资料不足时明确说明「没有足够信息」，不用模型自身知识补全",
+        "回答附带参考来源：文档、小节、相似度",
+        "与智能问数相互独立——这条链路不查业务数据，也未并入 Agent 工作流",
+      ],
+      upcoming: [
+        "接入企业真实业务文档，替换样例文档",
+        "引用检测：区分「检索到的资料」与「模型实际引用过的资料」",
+        "检索质量评测与人工反馈入口",
+        "并入 Agent 工作流，与数据查询协同回答",
+      ],
+      dependencies: ["知识库与 RAG → 知识问答应用"],
     },
   ],
 };

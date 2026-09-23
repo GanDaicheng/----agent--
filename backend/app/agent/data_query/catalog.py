@@ -1,10 +1,21 @@
 """模拟资产目录：智能问数 Agent 的「知识层」。
 
-⚠️ 重要声明：本文件里登记的指标和数据集全部是**模拟资产元数据**，
-只存在于这份 Python 常量里。它们**不代表 PostgreSQL 中已经存在这些表**，
-当前数据库仍然是空的，没有 orders / customers / products / regions / date_dim
-这些真实表，也没有任何数据。本阶段的目的是先把「找到资产」这一步跑通，
-等后续建表阶段完成，再把这里换成真实的元数据查询（或接元数据服务）。
+本文件里登记的指标和数据集是**人工维护的受控清单**，不是从 ORM 模型自动推导的。
+真实数仓表（orders / customers / products / regions / date_dim）已经由 Alembic 迁移
+建出、并由种子脚本写入样例数据，模型定义在 app/models/retail.py。
+
+为什么不让它自动从模型推导？和 services/safe_query.py 的理由一致：自动推导意味着
+给某张表加一个字段，它会立刻对所有下游可见。显式登记强迫每次扩权都经过一次有意识的
+修改。代价是登记内容可能与模型脱节——所以这里登记的每个表名、字段名、枚举值都必须
+能在 app/models/retail.py 里找到对应物，测试
+test_catalog_fields_all_exist_in_models 会守住这条约束。
+
+**字段名写错在这里是硬故障，不是文案瑕疵。** 本文件的 fields 同时被两处当白名单用：
+- sql_generation.py：拼进 Prompt，决定模型「以为」有哪些字段可写；
+- sql_validation.py：校验 AST 时用它判断列名是否存在。
+而真正执行前还有第二道白名单 services/safe_query.ALLOWED_COLUMNS。两道白名单一旦不一致，
+就会出现「catalog 放行、safe_query 拒绝」或反过来的死局——正确写法被判违规、错误写法
+放到最后一步才报未授权，Agent 永远答不出那类问题。
 
 本文件是纯常量 + 纯函数：不访问文件系统、数据库、网络和环境变量。
 所以它可以被任何模块安全导入，测试时也不需要任何额外条件。
@@ -106,7 +117,7 @@ DATASETS: tuple[DatasetSpec, ...] = (
         "display_name": "订单明细",
         "description": "一行一条订单商品行，是销售额、订单数、客单价、复购率等指标的主要来源表。",
         "fields": {
-            "order_no": "订单号，同一订单的多个商品行共享同一个订单号",
+            "order_no": "订单号，全表唯一；一行订单记录对应一笔订单，订单数用 COUNT(DISTINCT order_no) 统计",
             "date_id": "下单日期，关联 date_dim.date_id",
             "customer_id": "客户 ID，关联 customers.customer_id",
             "product_id": "商品 ID，关联 products.product_id",
@@ -133,7 +144,7 @@ DATASETS: tuple[DatasetSpec, ...] = (
         "description": "客户主数据，提供会员等级等客户属性，用于按会员分层分析和复购计算。",
         "fields": {
             "customer_id": "客户 ID，关联 orders.customer_id",
-            "member_level": "会员等级，例如普通、银卡、金卡、钻石",
+            "member_level": "会员等级，取值仅四种：普通会员、银卡会员、金卡会员、黑金会员",
         },
         "keywords": ("客户", "会员", "用户", "复购", "会员等级", "等级"),
     },
@@ -145,7 +156,7 @@ DATASETS: tuple[DatasetSpec, ...] = (
         "fields": {
             "product_id": "商品 ID，关联 orders.product_id",
             "product_name": "商品名称",
-            "category": "商品品类，例如家电、食品、服饰",
+            "category_name": "商品品类，例如家用电器、数码配件、厨房用品、服饰鞋帽、美妆个护、食品饮料",
         },
         "keywords": ("商品", "产品", "品类", "类目", "销量", "单品"),
     },
@@ -153,10 +164,10 @@ DATASETS: tuple[DatasetSpec, ...] = (
         "kind": "dataset",
         "name": "regions",
         "display_name": "区域",
-        "description": "销售区域主数据，提供大区与省市名称，用于地区维度分析。",
+        "description": "销售区域主数据，提供大区名称，用于地区维度分析。",
         "fields": {
             "region_id": "区域 ID，关联 orders.region_id",
-            "region_name": "区域名称，例如华东、华南、华北",
+            "region_name": "区域名称，例如华东、华南、华北、华中",
         },
         "keywords": ("区域", "地区", "大区", "省份", "城市", "华东", "华南", "华北"),
     },
@@ -166,8 +177,8 @@ DATASETS: tuple[DatasetSpec, ...] = (
         "display_name": "日期维度",
         "description": "日期维度表，用于把下单日期换算成年、季度、月，支撑时间趋势分析。",
         "fields": {
-            "date_id": "日期 ID，关联 orders.date_id",
-            "date_value": "具体日期",
+            "date_id": "日期 ID，主键，采用 YYYYMMDD 整数格式，关联 orders.date_id",
+            "full_date": "具体日期",
             "year": "年份",
             "month": "月份",
             "quarter": "季度",
