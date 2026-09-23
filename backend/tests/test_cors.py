@@ -208,4 +208,6 @@ def test_openapi_still_lists_every_endpoint():
         "/api/v1/agent/data-query",
         # RAG 阶段新增：知识库问答（检索 + 生成，与智能问数是两条独立链路）
         "/api/v1/rag/answer",
+        # 数据采集阶段新增：知识文档上传与列表（切片 + 向量化入库）
+        "/api/v1/rag/documents",
     }

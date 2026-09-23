@@ -33,12 +33,21 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
+from app.services.document_normalization import (
+    MARKDOWN_FILE_TYPE,
+    PLAIN_TEXT_FILE_TYPE,
+    title_from_source_file,
+)
+
 # 小节超过这个字符数才按段落二次切分。当前 5 个文档最长的小节约 715 字符，
 # 所以这个分支现在不会触发——它是为以后更长的文档准备的，测试用合成文档覆盖。
 MAX_SECTION_CHARS = 1200
 
 # 文档头部（H1 之后、第一个 H2 之前）那个引用块的 section_title
 _FRONT_MATTER_SECTION_TITLE = "文档元信息"
+
+# 纯文本文件没有内部结构，整篇算一个小节，用这个固定的标题。
+PLAIN_TEXT_SECTION_TITLE = "正文"
 
 _H1_PATTERN = re.compile(r"^#\s+(?P<title>.*\S)\s*$")
 _H2_PATTERN = re.compile(r"^##\s+(?P<title>.*\S)\s*$")
@@ -181,13 +190,21 @@ def _iter_sections(lines: list[str]) -> list[tuple[str, list[str]]]:
     return sections
 
 
-def parse_markdown_document(path: Path) -> list[KnowledgeChunk]:
-    """解析一个 Markdown 文件，返回它的切片列表（chunk_index 从 0 递增）。
+def parse_markdown_text(
+    text: str, *, source_file: str, title: str | None = None
+) -> list[KnowledgeChunk]:
+    """解析 Markdown 文本，返回切片列表（chunk_index 从 0 递增）。
 
-    没有一级标题时不报错，退回用文件名当 document_title——
-    报错会让一份格式不规范的文档卡住整批入库，而文件名本身已经是个可用的标识。
+    **从文本切片**，而不是从路径——这是「支持上传内容入库」的关键一步：
+    上传来的内容本来就没有磁盘路径，硬要先落盘再读既多余又引入临时文件。
+
+    title 的优先级（三者依次兜底）：
+      1. 调用方显式传的 title（比如上传表单里填的标题）；
+      2. 正文里的一级标题；
+      3. 文件名去掉后缀。
+    没有一级标题时不报错——报错会让一份格式不规范的文档卡住整批入库，
+    而文件名本身已经是个可用的标识。
     """
-    text = path.read_text(encoding="utf-8")
     lines = text.splitlines()
 
     document_title = ""
@@ -200,9 +217,12 @@ def parse_markdown_document(path: Path) -> list[KnowledgeChunk]:
             body_start = position + 1
             break
 
-    if not document_title:
-        document_title = path.stem
-        body_start = 0
+    # 调用方给的标题优先于文件里的一级标题：它是「这次入库想叫它什么」，
+    # 比文档自己写什么更权威（重命名一份旧文档时尤其明显）。
+    #
+    # 注意 body_start 仍然按「找到的那一行 H1」算：即使标题被调用方覆盖，
+    # 正文里那一行 H1 依然是标题行，不该混进切片正文。
+    document_title = title or document_title or title_from_source_file(source_file)
 
     chunks: list[KnowledgeChunk] = []
     chunk_index = 0
@@ -224,7 +244,7 @@ def parse_markdown_document(path: Path) -> list[KnowledgeChunk]:
             )
             chunks.append(
                 KnowledgeChunk(
-                    source_file=path.name,
+                    source_file=source_file,
                     document_title=document_title,
                     section_title=section_title,
                     chunk_index=chunk_index,
@@ -238,6 +258,78 @@ def parse_markdown_document(path: Path) -> list[KnowledgeChunk]:
             chunk_index += 1
 
     return chunks
+
+
+def parse_plain_text(
+    text: str, *, source_file: str, title: str | None = None
+) -> list[KnowledgeChunk]:
+    """解析纯文本，返回切片列表。
+
+    纯文本没有标题层级，所以**整篇算一个小节**：section_title 固定为「正文」。
+    过长时由 split_oversized_section 按空行分段切开（同一个函数，
+    和 Markdown 共用——分段的规则不该因为文件类型而不同）。
+
+    为什么不拿文件名当小节标题？那会拼出「文档：订单规范 / 小节：订单规范」
+    这样重复的上下文。小节名要回答的是「这一段在讲什么」，
+    对一个没有内部结构的文件，诚实的答案就是「正文」。
+    """
+    document_title = title or title_from_source_file(source_file)
+    body = clean_markdown_body(text)
+    if not body:
+        return []
+
+    chunks: list[KnowledgeChunk] = []
+    for chunk_index, piece in enumerate(split_oversized_section(body)):
+        content_for_embedding = build_content_for_embedding(
+            document_title, PLAIN_TEXT_SECTION_TITLE, piece
+        )
+        chunks.append(
+            KnowledgeChunk(
+                source_file=source_file,
+                document_title=document_title,
+                section_title=PLAIN_TEXT_SECTION_TITLE,
+                chunk_index=chunk_index,
+                content=piece,
+                content_for_embedding=content_for_embedding,
+                content_hash=chunk_hash(content_for_embedding),
+                estimated_token_count=estimate_token_count(piece),
+                char_count=len(piece),
+            )
+        )
+    return chunks
+
+
+def parse_document_text(
+    text: str,
+    *,
+    source_file: str,
+    file_type: str,
+    title: str | None = None,
+) -> list[KnowledgeChunk]:
+    """按文件类型选切片策略。file_type 应当已经过 normalize_file_type 归一。
+
+    分发放在这里而不是调用方：调用方只需要知道「这是一份 md/txt」，
+    不该同时知道「md 该怎么切」。将来加新类型（比如 csv）时，
+    只在这里多一个分支，入库服务一行都不用改。
+    """
+    if file_type == MARKDOWN_FILE_TYPE:
+        return parse_markdown_text(text, source_file=source_file, title=title)
+    if file_type == PLAIN_TEXT_FILE_TYPE:
+        return parse_plain_text(text, source_file=source_file, title=title)
+    # 理论上到不了：normalize_file_type 已经把不支持的类型挡在门外。
+    # 保留这一支是为了「传进来没归一过的类型」时能立刻炸，而不是静默返回空列表。
+    raise ValueError(f"没有对应的切片策略：{file_type!r}")
+
+
+def parse_markdown_document(path: Path) -> list[KnowledgeChunk]:
+    """解析一个 Markdown **文件**，返回它的切片列表。
+
+    行为与重构前完全一致（source_file 取文件名、标题退回文件名去后缀）——
+    它只是 parse_markdown_text 的一层薄封装，让目录扫描那条老路径继续可用。
+    """
+    return parse_markdown_text(
+        path.read_text(encoding="utf-8"), source_file=path.name
+    )
 
 
 def knowledge_document_paths(directory: Path) -> list[Path]:

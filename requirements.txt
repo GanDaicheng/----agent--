@@ -1,5 +1,10 @@
 fastapi
 uvicorn[standard]
+
+# FastAPI 解析 multipart/form-data 需要它：知识文档上传接口用的是 UploadFile。
+# 缺了它 FastAPI 会在**导入路由时**就抛 RuntimeError，整个服务起不来，
+# 所以它虽然只在一条链路上用，也属于必需依赖。
+python-multipart
 langchain
 langgraph
 langchain-openai
@@ -8,6 +13,13 @@ tzdata
 
 # SQL 安全校验：把 SQL 解析成 AST 再逐条检查，不用字符串匹配猜安全性
 sqlglot
+
+# 知识文档解析：把上传的 docx / pdf 还原成带标题层级的 Markdown。
+# python-docx 读 Word 的段落样式（Heading1/2…）来恢复层级；
+# pdfplumber 读 PDF 的文字与字号（PDF 里没有「标题」这个概念，只能靠字号推）。
+# 两者都只在 app/services/document_processors.py 里被 import，别处不许依赖它们。
+python-docx
+pdfplumber
 
 # 数据库：异步 SQLAlchemy + asyncpg 驱动
 # alembic 本阶段只安装不使用，供后续迁移阶段直接使用

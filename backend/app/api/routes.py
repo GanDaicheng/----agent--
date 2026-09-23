@@ -1,8 +1,10 @@
 import logging
 from collections.abc import Mapping
+from datetime import datetime
+from pathlib import Path
 from typing import Literal
 
-from fastapi import APIRouter, HTTPException, Response
+from fastapi import APIRouter, File, Form, HTTPException, Response, UploadFile
 from pydantic import BaseModel, Field, ValidationError, field_validator
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -24,6 +26,20 @@ from app.agent.data_query.graph import get_data_query_graph
 from app.agent.graph import run_agent
 from app.core.exceptions import ConfigurationError
 from app.services.database_health import check_database
+from app.services.document_normalization import (
+    EmptyDocumentError,
+    UndecodableDocumentError,
+)
+from app.services.document_processors import (
+    SUPPORTED_UPLOAD_TYPES,
+    DocumentParseError,
+    NoExtractableTextError,
+    UnsupportedUploadTypeError,
+    extract_document_text,
+    normalize_upload_type,
+)
+from app.services.knowledge_catalog import list_documents
+from app.services.knowledge_ingestion import ingest_knowledge_document_from_content
 from app.services.knowledge_search import DEFAULT_TOP_K, MAX_TOP_K, MIN_TOP_K
 from app.services.rag_answer import answer_from_knowledge
 from app.services.safe_query import (
@@ -725,4 +741,280 @@ async def rag_answer(req: RagAnswerRequest) -> RagAnswerResponse:
             )
             for source in result.sources
         ],
+    )
+
+
+# --------------------------------------------------------------------------
+# 知识文档上传（数据采集 → 知识库）
+# --------------------------------------------------------------------------
+
+# 上传体积上限。
+#
+# 原来是 2 MiB，理由是「知识文档是纯文本，2 MiB 足够」——**这个理由在支持
+# docx / pdf 之后就不成立了**：Word 文档夹几张截图、导出的 PDF 带上版式字体，
+# 随手就超过 2 MiB，而我们要的只是里面的文字。留在 2 MiB 会让新格式基本用不了。
+#
+# 提到 10 MiB 仍然很保守：解析只为取文字，图片不会被读进来；而且读的时候是
+# 分块读、一超限立刻停手（见 read_upload_within_limit），不会把整个文件驻留内存。
+# 注意这是**字节**上限不是字数：中文一个字占 3 字节，别按字符数估。
+MAX_UPLOAD_BYTES = 10 * 1024 * 1024
+
+# 分块读取的块大小。
+UPLOAD_CHUNK_BYTES = 64 * 1024
+
+# 与 knowledge_documents 表里两列 String(255) 对齐。不在这里拦住的话，
+# 超长文件名会一路走到 INSERT 才失败，还会以 503「知识库暂时不可用」的面目
+# 出现在用户面前——那是把「你的文件名太长」错报成「后端挂了」。
+MAX_SOURCE_FILE_LENGTH = 255
+MAX_DOCUMENT_TITLE_LENGTH = 255
+
+# 下面这些是**按类别预定义**的文案，不把异常原文拼进响应：
+# 类别是我们自己判定的，所以文案既能说清问题，又不会夹带内部细节。
+RAG_UPLOAD_UNSUPPORTED_TYPE_DETAIL = (
+    f"不支持的文件类型，当前仅支持：{'、'.join(SUPPORTED_UPLOAD_TYPES)}。"
+)
+RAG_UPLOAD_UNDECODABLE_DETAIL = "文件不是合法的 UTF-8 文本，请另存为 UTF-8 编码后重新上传。"
+RAG_UPLOAD_EMPTY_DETAIL = "文件内容为空，没有可入库的内容。"
+RAG_UPLOAD_PARSE_FAILED_DETAIL = (
+    "文件无法解析，可能已损坏、已加密，或不是有效的该格式文件。"
+)
+RAG_UPLOAD_NO_TEXT_LAYER_DETAIL = (
+    "文件里没有可提取的文字（扫描件或纯图片 PDF），需要 OCR 才能读取，本服务不做 OCR。"
+)
+RAG_UPLOAD_TOO_LARGE_DETAIL = (
+    f"文件过大，单个文件不能超过 {MAX_UPLOAD_BYTES // (1024 * 1024)} MiB。"
+)
+RAG_UPLOAD_BAD_NAME_DETAIL = (
+    f"文件名不合法（为空或超过 {MAX_SOURCE_FILE_LENGTH} 个字符），请重命名后重试。"
+)
+RAG_UPLOAD_BAD_TITLE_DETAIL = (
+    f"文档标题过长，请控制在 {MAX_DOCUMENT_TITLE_LENGTH} 个字符以内。"
+)
+RAG_UPLOAD_NOT_READY_DETAIL = "知识文档入库服务未就绪，请稍后重试。"
+RAG_UPLOAD_FAILED_DETAIL = "知识文档入库失败，请稍后重试。"
+RAG_DOCUMENT_LIST_FAILED_DETAIL = "知识库文档列表暂时不可用，请稍后重试。"
+
+
+class UploadTooLargeError(Exception):
+    """上传内容超过体积上限。只在路由内部流转，不对应任何对外错误类型。"""
+
+
+class RagDocumentUploadResponse(BaseModel):
+    """一次上传入库的结果。
+
+    刻意不含 content_hash 与 document_id：前者是查重用的内部指纹，
+    后者是数据库主键。前端真正要用的是这三个——
+    action（这次到底写没写）、chunk_count（有多少内容进了库）、
+    embedded_chunks（这次花了多少次向量计算，skip 时必然是 0）。
+    """
+
+    source_file: str
+    action: Literal["insert", "update", "skip"]
+    chunk_count: int
+    embedded_chunks: int
+
+
+class RagDocumentSummaryResponse(BaseModel):
+    """列表里的一份文档。字段与 knowledge_catalog.KnowledgeDocumentSummary 对应。"""
+
+    source_file: str
+    document_title: str
+    chunk_count: int
+    created_at: datetime
+    updated_at: datetime
+
+
+class RagDocumentListResponse(BaseModel):
+    """知识库文档列表。
+
+    包一层对象而不是直接返回数组：将来要加 total、分页游标时，
+    加字段不会破坏已有的调用方，而返回裸数组就只能改结构了。
+    """
+
+    documents: list[RagDocumentSummaryResponse]
+
+
+async def read_upload_within_limit(file: UploadFile, *, limit: int) -> bytes:
+    """分块读取上传内容，一超过 limit 立刻停手。
+
+    **不能**写成 `raw = await file.read()` 再判断长度——那样超大文件已经被
+    整个读进内存了，后面的判断只是事后补一句「你超限了」，限流等于没做。
+    分块读到超限就抛，内存占用最多是 limit 加一个块。
+    """
+    collected = bytearray()
+    while True:
+        chunk = await file.read(UPLOAD_CHUNK_BYTES)
+        if not chunk:
+            return bytes(collected)
+        collected.extend(chunk)
+        if len(collected) > limit:
+            raise UploadTooLargeError
+
+
+@router.post(
+    "/api/v1/rag/documents",
+    response_model=RagDocumentUploadResponse,
+    responses={
+        422: {
+            "description": "文件类型不支持、解析失败、非 UTF-8、内容为空或超出体积上限"
+        },
+        503: {"description": RAG_KNOWLEDGE_UNAVAILABLE_DETAIL},
+        500: {"description": RAG_UPLOAD_FAILED_DETAIL},
+    },
+)
+async def upload_rag_document(
+    file: UploadFile = File(
+        description="要入库的知识文档，支持 .md / .txt / .docx / .pdf。"
+    ),
+    title: str | None = Form(
+        default=None,
+        description="可选的文档标题。不填则按文档自身的一级标题、其次按文件名。",
+    ),
+) -> RagDocumentUploadResponse:
+    """上传一份知识文档，切片、向量化后写入知识库。
+
+    路由只做 HTTP 适配：取文件名、读字节、把受控异常翻译成状态码。
+    「什么格式怎么提取文本」在 app/services/document_processors.py，
+    「提取出的文本怎么切片、向量化、入库」在 app/services/knowledge_ingestion.py ——
+    路由重复任何一遍都只会多出一份会走样的副本。
+
+    docx / pdf 会先被文件处理器还原成带标题层级的 Markdown，再走与 md 完全相同的切片路径，
+    所以「支持新格式」不需要改动切片与入库逻辑。扫描件 PDF（没有文字层）提取不出内容，
+    会以「文件内容为空」被拒——本服务不做 OCR。
+
+    幂等由入库服务保证，所以**重复上传同一份文件是安全的**：
+    内容没变时 action 是 skip，一次 embedding 都不会调。
+
+    状态码约定：
+    - 200：入库完成（含 action=skip，即内容没变、什么都没写）
+    - 422：请求体不合法（文件名非法、类型不支持、解析失败、非 UTF-8、内容为空、
+           超出体积上限）
+    - 503：数据库/知识库连不上
+    - 500：配置未就绪（embedding 的 Key 缺失）或其它内部异常
+
+    错误响应只回显按类别预定义的固定文案，绝不带文件正文、连接串或异常原文。
+    """
+    # 1. 取文件名。只保留最后一段：部分客户端会把完整本地路径塞进 filename，
+    #    而 source_file 是文档的业务主键，里面不该出现目录分隔符。
+    source_file = Path(file.filename or "").name.strip()
+    if not source_file or len(source_file) > MAX_SOURCE_FILE_LENGTH:
+        raise HTTPException(status_code=422, detail=RAG_UPLOAD_BAD_NAME_DETAIL)
+
+    # 2. 标题是可选增强。空白等于没填，交回下游按文档一级标题、再按文件名兜底。
+    normalized_title = (title or "").strip() or None
+    if normalized_title is not None and len(normalized_title) > MAX_DOCUMENT_TITLE_LENGTH:
+        raise HTTPException(status_code=422, detail=RAG_UPLOAD_BAD_TITLE_DETAIL)
+
+    # 3. 读字节，带着体积上限读。
+    try:
+        raw = await read_upload_within_limit(file, limit=MAX_UPLOAD_BYTES)
+    except UploadTooLargeError as exc:
+        raise HTTPException(status_code=422, detail=RAG_UPLOAD_TOO_LARGE_DETAIL) from exc
+
+    # 4. 校验上传类型 → 选文件处理器提取文本 → 入库。
+    #    前四类异常都是「用户给的文件有问题」，属于 422，不是服务故障。
+    #
+    #    注意这里交给入库服务的 file_type 是 processed.chunk_type（只能是 md/txt），
+    #    **不是** upload_type。docx/pdf 已经被处理器还原成 Markdown，
+    #    对切片器来说它们就是一份 Markdown——入库服务因此完全不需要知道
+    #    docx/pdf 的存在，这也是本次能一行不改入库逻辑的原因。
+    try:
+        upload_type = normalize_upload_type(Path(source_file).suffix)
+        processed = extract_document_text(
+            raw, source_file=source_file, file_type=upload_type
+        )
+        result = await ingest_knowledge_document_from_content(
+            source_file=source_file,
+            content=processed.text,
+            file_type=processed.chunk_type,
+            title=normalized_title,
+        )
+    except UnsupportedUploadTypeError as exc:
+        raise HTTPException(
+            status_code=422, detail=RAG_UPLOAD_UNSUPPORTED_TYPE_DETAIL
+        ) from exc
+    except DocumentParseError as exc:
+        raise HTTPException(
+            status_code=422, detail=RAG_UPLOAD_PARSE_FAILED_DETAIL
+        ) from exc
+    except NoExtractableTextError as exc:
+        raise HTTPException(
+            status_code=422, detail=RAG_UPLOAD_NO_TEXT_LAYER_DETAIL
+        ) from exc
+    except UndecodableDocumentError as exc:
+        raise HTTPException(status_code=422, detail=RAG_UPLOAD_UNDECODABLE_DETAIL) from exc
+    except EmptyDocumentError as exc:
+        raise HTTPException(status_code=422, detail=RAG_UPLOAD_EMPTY_DETAIL) from exc
+    except ConfigurationError as exc:
+        # 配置类异常的文案是按「不含密钥」设计的（只点名缺哪个变量），可以记原文，
+        # 否则「缺 Key」只会留下一个光秃秃的类名，排查时不知道该补哪个变量。
+        logger.warning("知识文档入库配置未就绪：%s", exc)
+        raise HTTPException(status_code=500, detail=RAG_UPLOAD_NOT_READY_DETAIL) from exc
+    except SQLAlchemyError as exc:
+        logger.warning("知识库不可用（文档入库）：%s", type(exc).__name__)
+        raise HTTPException(
+            status_code=503, detail=RAG_KNOWLEDGE_UNAVAILABLE_DETAIL
+        ) from exc
+    except Exception as exc:  # noqa: BLE001
+        # 模型/embedding SDK 的异常原文可能带着请求细节，只记类型。
+        # 也不记 source_file —— 文件名属于用户数据，不进普通日志。
+        logger.warning("知识文档入库失败：%s", type(exc).__name__)
+        raise HTTPException(status_code=500, detail=RAG_UPLOAD_FAILED_DETAIL) from exc
+
+    return RagDocumentUploadResponse(
+        source_file=result.source_file,
+        action=result.action,
+        chunk_count=result.chunk_count,
+        embedded_chunks=result.embedded_chunks,
+    )
+
+
+@router.get(
+    "/api/v1/rag/documents",
+    response_model=RagDocumentListResponse,
+    responses={
+        503: {"description": RAG_KNOWLEDGE_UNAVAILABLE_DETAIL},
+        500: {"description": RAG_DOCUMENT_LIST_FAILED_DETAIL},
+    },
+)
+async def list_rag_documents() -> RagDocumentListResponse:
+    """列出知识库里已有的文档，最近更新的排在最前。
+
+    只读接口，没有参数。前端「数据采集」页在上传成功后、以及点「刷新」时调它。
+
+    状态码约定：
+    - 200：返回列表（**空库也是 200**，返回空数组——那是「还没有文档」这个
+           诚实的业务结果，不是故障，不该让页面显示成报错）
+    - 503：数据库/知识库连不上
+    - 500：配置未就绪或其它内部异常
+    """
+    try:
+        documents = await list_documents()
+    except ConfigurationError as exc:
+        logger.warning("知识库配置未就绪（文档列表）：%s", exc)
+        raise HTTPException(
+            status_code=500, detail=RAG_DOCUMENT_LIST_FAILED_DETAIL
+        ) from exc
+    except SQLAlchemyError as exc:
+        logger.warning("知识库不可用（文档列表）：%s", type(exc).__name__)
+        raise HTTPException(
+            status_code=503, detail=RAG_KNOWLEDGE_UNAVAILABLE_DETAIL
+        ) from exc
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("知识库文档列表查询失败：%s", type(exc).__name__)
+        raise HTTPException(
+            status_code=500, detail=RAG_DOCUMENT_LIST_FAILED_DETAIL
+        ) from exc
+
+    return RagDocumentListResponse(
+        documents=[
+            RagDocumentSummaryResponse(
+                source_file=item.source_file,
+                document_title=item.document_title,
+                chunk_count=item.chunk_count,
+                created_at=item.created_at,
+                updated_at=item.updated_at,
+            )
+            for item in documents
+        ]
     )

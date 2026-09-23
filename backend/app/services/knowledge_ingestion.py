@@ -1,4 +1,20 @@
-"""知识文档入库：Markdown → 切片 → 向量 → 两张知识库表。
+"""知识文档入库：文档内容 → 切片 → 向量 → 两张知识库表。
+
+## 两个入口，同一段内核
+
+| 入口 | 切片从哪来 | 用在哪 |
+| --- | --- | --- |
+| `ingest_knowledge(directory)` | 扫描目录下的 .md 文件 | 种子知识库同步（scripts/ingest_knowledge.py） |
+| `ingest_knowledge_document_from_content(...)` | 调用方直接给的文本 | 上传入库（md / txt） |
+
+两者只在「切片从哪来」上不同，之后的定计划、算向量、写库全部走
+`_ingest_grouped_chunks`——同一段代码只写一遍。那些逻辑里每一句都带着
+踩过的坑（hash 要对 content_for_embedding 取、复用向量必须先比模型、
+删除必须在插入之前），复制一份就是让这些坑有第二次踩错的机会。
+
+「document」（单份）和「directory」（整目录）的粒度差别，落在返回值上：
+前者返回 `KnowledgeIngestionResult`（这一份是 insert / update / skip），
+后者返回 `IngestSummary`（这一批插了几行、算了几条向量）。
 
 ## 幂等是怎么做到的
 
@@ -45,6 +61,7 @@ Core 语句同样是全参数化的，不存在把文本拼进 SQL 的问题。
 
 import hashlib
 from collections.abc import Awaitable, Callable, Sequence
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -56,8 +73,18 @@ from sqlalchemy.ext.asyncio import AsyncConnection
 from app.core.config import EmbeddingSettings, get_settings
 from app.models.knowledge import KnowledgeChunk as KnowledgeChunkRow
 from app.models.knowledge import KnowledgeDocument
+from app.repositories.database import get_engine
+from app.services.document_normalization import (
+    EmptyDocumentError,
+    normalize_document_content,
+    normalize_file_type,
+)
 from app.services.embedding import embed_texts
-from app.services.knowledge_chunking import KnowledgeChunk, load_knowledge_chunks
+from app.services.knowledge_chunking import (
+    KnowledgeChunk,
+    load_knowledge_chunks,
+    parse_document_text,
+)
 
 # 单次批量请求的切片条数。百炼 text-embedding-v4 的 input 数组有上限，
 # 取 10 是保守值：比逐条调用少 90% 的请求数，又不会因为超出上限被拒。
@@ -165,6 +192,34 @@ class IngestSummary:
             ("elapsed_seconds", f"{self.elapsed_seconds:.2f}"),
             ("status", self.status),
         ]
+
+
+@dataclass(frozen=True)
+class KnowledgeIngestionResult:
+    """**单份文档**入库的结果。
+
+    和 IngestSummary 的区别是粒度：那个是「一次目录同步干了什么」的汇总，
+    这个是「这一份文档怎么了」——上传接口需要的是后者。
+    最要紧的字段是 action：调用方靠它区分「新入库」「更新了」「没变所以跳过」，
+    而 embedded_chunks 是他真正花了钱的那部分（skip 时必然是 0）。
+
+    dry_run 单独记一个字段而不是塞进 action：action 表达的是**内容层面**
+    发生了什么（该插该改还是没变），dry_run 表达的是**这次有没有真写**。
+    两者正交——dry-run 一次新文档，action 仍然是 insert。
+    """
+
+    source_file: str
+    action: Action
+    document_id: int | None
+    content_hash: str
+    chunk_count: int
+    embedded_chunks: int
+    dry_run: bool
+
+    @property
+    def written(self) -> bool:
+        """这次调用是否真的写了库（dry-run 和 skip 都是 False）。"""
+        return not self.dry_run and self.action != "skip"
 
 
 # --------------------------------------------------------------------------
@@ -529,18 +584,51 @@ async def ingest_knowledge(
 
     dry_run=True 时只算计划、不调 embedding、不写库——用来在真正花钱之前
     确认「这次会插几行、会重算几条向量」。
+
+    这是「目录同步」这条入口，保持原有签名不变；它只负责**取切片**，
+    剩下的活全交给 _ingest_grouped_chunks —— 和单份文档入库走的是同一段逻辑。
+    """
+    chunks = load_knowledge_chunks(directory)
+    _, summary = await _ingest_grouped_chunks(
+        group_chunks_by_source_file(chunks),
+        store=store,
+        embedder=embedder,
+        embedding_model=embedding_model,
+        batch_size=batch_size,
+        dry_run=dry_run,
+    )
+    return summary
+
+
+async def _ingest_grouped_chunks(
+    grouped_chunks: dict[str, list[KnowledgeChunk]],
+    *,
+    store: KnowledgeStore,
+    embedder: Embedder,
+    embedding_model: str | None,
+    batch_size: int,
+    dry_run: bool,
+) -> tuple[list[DocumentPlan], IngestSummary]:
+    """入库的**核心**：定计划 → 算向量 → 写库，返回 (计划, 汇总)。
+
+    两个入口（目录同步、单份文档）共用这一段，差别只在「切片从哪来」。
+    抽出来而不是让单份文档那条路自己再实现一遍，是因为这里面每一句都带着
+    踩过的坑——hash 要对 content_for_embedding 取、复用向量要先比模型、
+    删除必须在插入之前——复制一份就是让这些坑有第二次踩错的机会。
+
+    返回 plans 是为了让调用方能拿到「这一份文档是什么 action」——
+    汇总里只有一个计数，而单份入库需要知道具体是 insert / update / skip。
     """
     started = datetime.now(timezone.utc)
-
-    chunks = load_knowledge_chunks(directory)
-    grouped = group_chunks_by_source_file(chunks)
 
     if embedding_model is None:
         embedding_model = get_settings().require_embedding_settings().model
 
-    existing = await store.load_existing(list(grouped))
+    total_chunks = sum(len(items) for items in grouped_chunks.values())
+
+    existing = await store.load_existing(list(grouped_chunks))
     plans = build_plans(
-        grouped_chunks=grouped,
+        grouped_chunks=grouped_chunks,
         existing_documents=existing,
         embedding_model=embedding_model,
     )
@@ -551,11 +639,111 @@ async def ingest_knowledge(
         await store.apply(writes)
 
     elapsed = (datetime.now(timezone.utc) - started).total_seconds()
-    return summarize(
+    summary = summarize(
         plans=plans,
-        scanned_documents=len(grouped),
-        scanned_chunks=len(chunks),
+        scanned_documents=len(grouped_chunks),
+        scanned_chunks=total_chunks,
         elapsed_seconds=elapsed,
+        dry_run=dry_run,
+    )
+    return plans, summary
+
+
+@asynccontextmanager
+async def _store_scope(store: KnowledgeStore | None):
+    """有外部 store 就用外部的（测试注入用），没有再自己开一个事务。
+
+    自己开事务时用 engine.begin()：**一份文档一个事务**，要么整份写进去、
+    要么整份回滚，不会留下「文档行更新了、切片还是旧的」这种半截状态。
+    注意不能用 get_connection()——它归还连接时会把未提交的改动回滚掉。
+    """
+    if store is not None:
+        yield store
+        return
+
+    async with get_engine().begin() as connection:
+        yield PostgresKnowledgeStore(connection)
+
+
+async def ingest_knowledge_document_from_content(
+    *,
+    source_file: str,
+    content: str,
+    file_type: str,
+    title: str | None = None,
+    store: KnowledgeStore | None = None,
+    embedder: Embedder = embed_texts,
+    embedding_model: str | None = None,
+    batch_size: int = EMBEDDING_BATCH_SIZE,
+    dry_run: bool = False,
+) -> KnowledgeIngestionResult:
+    """入库**一份文档的内容**（md / txt），返回这份文档的入库结果。
+
+    这是给「上传」用的入口：调用方手里只有文件名和文本，没有磁盘路径。
+    和 ingest_knowledge（扫目录）共用同一段入库逻辑，区别只在于切片从哪来。
+
+    幂等判定沿用同一套：source_file 是文档的业务主键，
+    整篇 hash 由该文档所有切片的 hash 组合而来——
+        - 库里没有这份文档          → insert，全部切片算向量
+        - 有且整篇 hash 未变        → skip，**一次 embedding 都不调**
+        - 有但 hash 变了            → update，只重算变了的那几片
+
+    注意「未变」是按**切片结果**判的，不是按原始字节：内容里加个空行、
+    把 CRLF 换成 LF，只要切出来的片段一样，就算未变——这正是想要的，
+    否则同一份文档在不同机器上传会反复重算向量，白花钱。
+
+    store 不传时自己开一个事务（一份文档一个事务，见 _store_scope）；
+    传了就用外部的，测试因此不必连数据库。
+    """
+    # 先归一类型与内容，再切片。顺序不能反：file_type 不认识就该当场报错，
+    # 而不是先切出一堆东西再发现类型不对。
+    normalized_type = normalize_file_type(file_type)
+    normalized_content = normalize_document_content(content)
+
+    chunks = parse_document_text(
+        normalized_content,
+        source_file=source_file,
+        file_type=normalized_type,
+        title=title,
+    )
+
+    if not chunks:
+        # 空文档**报错而不是静默成功**。返回「ok，0 个切片」会让调用方以为
+        # 上传成功了，而知识库里什么都没有——等到检索不到才发现，
+        # 那时已经离现场很远了。（切片器只会对全空白内容返回空列表。）
+        raise EmptyDocumentError(
+            f"{source_file} 的内容切片后为空（全是空白？），没有可入库的内容。"
+        )
+
+    grouped = {source_file: list(chunks)}
+
+    async with _store_scope(store) as active_store:
+        plans, summary = await _ingest_grouped_chunks(
+            grouped,
+            store=active_store,
+            embedder=embedder,
+            embedding_model=embedding_model,
+            batch_size=batch_size,
+            dry_run=dry_run,
+        )
+
+        plan = plans[0]
+
+        # INSERT 时 document_id 要等写库拿到自增主键之后才知道，
+        # 而 plan 是在写之前定的（那时必然是 None）。所以写完再查一次——
+        # 一次很便宜的主键查询，换「调用方拿得到 document_id」这个实用性。
+        document_id = plan.document_id
+        if document_id is None and not dry_run and plan.action != "skip":
+            after = await active_store.load_existing([source_file])
+            document_id = after[source_file].id if source_file in after else None
+
+    return KnowledgeIngestionResult(
+        source_file=source_file,
+        action=plan.action,
+        document_id=document_id,
+        content_hash=plan.content_hash,
+        chunk_count=len(chunks),
+        embedded_chunks=summary.embedded_chunks,
         dry_run=dry_run,
     )
 

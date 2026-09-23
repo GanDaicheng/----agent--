@@ -24,6 +24,11 @@ import pytest
 
 from app.core.config import EmbeddingSettings
 from app.services import knowledge_ingestion
+from app.services.document_normalization import (
+    EmptyDocumentError,
+    UnsupportedDocumentTypeError,
+)
+from app.services.knowledge_chunking import load_knowledge_chunks
 from app.services.knowledge_ingestion import (
     ExistingChunk,
     ExistingDocument,
@@ -32,10 +37,10 @@ from app.services.knowledge_ingestion import (
     document_content_hash,
     group_chunks_by_source_file,
     ingest_knowledge,
+    ingest_knowledge_document_from_content,
     pending_embedding_texts,
     plan_document,
 )
-from app.services.knowledge_chunking import load_knowledge_chunks
 
 BACKEND_DIR = pathlib.Path(__file__).resolve().parents[1]
 REAL_DOCS_DIR = BACKEND_DIR / "knowledge_seed" / "retail"
@@ -691,3 +696,426 @@ def test_real_documents_ingest_then_skip():
     assert second.inserted_chunks == 0
     assert second.embedded_chunks == 0
     assert second_embedder.calls == []
+
+
+# ==========================================================================
+# 从「内容」入库（上传那条路）
+#
+# 和上面「扫目录」共用同一段内核，所以幂等、向量复用这些行为应当完全一致。
+# 这一节主要盯两件目录那条路没有的事：
+# 1. 类型与内容的归一化会不会被正确执行（BOM、CRLF、file_type）；
+# 2. 返回的是**单份文档**的结果（action / document_id），不是整批汇总。
+# ==========================================================================
+
+
+class RecordingStore(FakeStore):
+    """在 FakeStore 基础上记下每次写入的 DocumentWrite。
+
+    FakeStore 只留了 id 和 hash，断言不了 document_title / content 这些语义字段。
+    这里把原始写入对象存下来，让「标题覆盖生效了没有」这类断言成为可能。
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.writes: list = []
+
+    async def apply(self, writes):
+        self.writes.extend(writes)
+        await super().apply(writes)
+
+
+async def ingest_content(
+    *,
+    source_file: str,
+    content: str,
+    file_type: str = "md",
+    store,
+    embedder,
+    **kwargs,
+):
+    return await ingest_knowledge_document_from_content(
+        source_file=source_file,
+        content=content,
+        file_type=file_type,
+        store=store,
+        embedder=embedder,
+        embedding_model=MODEL,
+        **kwargs,
+    )
+
+
+MARKDOWN_DOC = """# 订单口径
+
+## 1. 订单数
+
+订单数用 COUNT(DISTINCT order_no)。
+
+## 2. 客单价
+
+客单价 = 销售额 / 订单数。
+"""
+
+
+def test_content_ingestion_inserts_a_new_document():
+    store, embedder = RecordingStore(), FakeEmbedder()
+
+    result = asyncio.run(
+        ingest_content(
+            source_file="orders.md", content=MARKDOWN_DOC, store=store, embedder=embedder
+        )
+    )
+
+    assert result.action == "insert"
+    assert result.source_file == "orders.md"
+    assert result.chunk_count == 2
+    assert result.embedded_chunks == 2
+    assert result.document_id is not None
+    assert result.content_hash
+    assert result.dry_run is False
+    assert result.written is True
+
+
+def test_content_ingestion_reports_update_on_change():
+    store = RecordingStore()
+    asyncio.run(
+        ingest_content(
+            source_file="orders.md", content=MARKDOWN_DOC, store=store, embedder=FakeEmbedder()
+        )
+    )
+    original_id = store.documents["orders.md"].id
+
+    result = asyncio.run(
+        ingest_content(
+            source_file="orders.md",
+            content=MARKDOWN_DOC.replace("订单数用", "订单数统一用"),
+            store=store,
+            embedder=FakeEmbedder(),
+        )
+    )
+
+    assert result.action == "update"
+    assert result.document_id == original_id  # 是更新，不是新建
+    assert store.chunk_count("orders.md") == 2
+
+
+def test_content_ingestion_is_idempotent_across_formatting_differences():
+    """★ 归一化的意义所在：同一份内容换种换行符上传，不该被当成「变了」。
+
+    不做归一化的话，Windows 上传（CRLF）与 Linux 上传（LF）算出的
+    content_hash 不同，于是每次都判 update、每次都重算向量——真花钱，
+    而且内容一个字都没改。
+    """
+    store = RecordingStore()
+    asyncio.run(
+        ingest_content(
+            source_file="orders.md", content=MARKDOWN_DOC, store=store, embedder=FakeEmbedder()
+        )
+    )
+
+    crlf_version = "﻿" + MARKDOWN_DOC.replace("\n", "\r\n")
+    second_embedder = FakeEmbedder()
+
+    result = asyncio.run(
+        ingest_content(
+            source_file="orders.md",
+            content=crlf_version,
+            file_type=".MD",  # 类型写法也不同
+            store=store,
+            embedder=second_embedder,
+        )
+    )
+
+    assert result.action == "skip"
+    assert result.written is False
+    # 最要紧的一条：一次 embedding 都没调
+    assert second_embedder.calls == []
+
+
+def test_content_ingestion_respects_the_explicit_title():
+    store = RecordingStore()
+
+    asyncio.run(
+        ingest_content(
+            source_file="orders.md",
+            content=MARKDOWN_DOC,
+            store=store,
+            embedder=FakeEmbedder(),
+            title="订单指标口径（2025 修订版）",
+        )
+    )
+
+    document = store.writes[-1]
+    assert document.document_title == "订单指标口径（2025 修订版）"
+    # 标题变了，进 embedding 的文本也跟着变——这正是「标题必须能覆盖」的理由
+    assert "订单指标口径（2025 修订版）" in store.writes[-1].records[0].chunk.content_for_embedding
+
+
+def test_changing_only_the_title_reembeds():
+    """标题覆盖进 content_for_embedding，所以只改标题也该重算向量。"""
+    store = RecordingStore()
+    asyncio.run(
+        ingest_content(
+            source_file="orders.md", content=MARKDOWN_DOC, store=store, embedder=FakeEmbedder()
+        )
+    )
+
+    result = asyncio.run(
+        ingest_content(
+            source_file="orders.md",
+            content=MARKDOWN_DOC,
+            title="换个标题",
+            store=store,
+            embedder=FakeEmbedder(),
+        )
+    )
+
+    assert result.action == "update"
+    assert result.embedded_chunks == 2
+
+
+def test_content_ingestion_accepts_plain_text():
+    store = RecordingStore()
+
+    result = asyncio.run(
+        ingest_content(
+            source_file="docs/盘点规范.txt",
+            content="第一条 每周一盘点。\n\n第二条 差异超过 1% 需要复核。",
+            file_type="txt",
+            store=store,
+            embedder=FakeEmbedder(),
+        )
+    )
+
+    assert result.action == "insert"
+    assert result.chunk_count == 1
+    record = store.writes[-1].records[0]
+    assert record.chunk.section_title == "正文"
+    assert record.chunk.document_title == "盘点规范"
+
+
+def test_source_file_is_the_identity_not_the_content():
+    """同名不同内容是更新；同内容不同名是两份文档。
+
+    source_file 是这份文档的业务主键——上传场景里它就是文件名，
+    所以「两份都叫 说明.txt 的文件」会被视为同一份的后一次覆盖，
+    这是有意的（改名了就是另一份文档）。
+    """
+    store = RecordingStore()
+    asyncio.run(
+        ingest_content(
+            source_file="a.md", content="# 甲\n\n## 1. 小节\n\n同样的正文。",
+            store=store, embedder=FakeEmbedder(),
+        )
+    )
+    asyncio.run(
+        ingest_content(
+            source_file="b.md", content="# 甲\n\n## 1. 小节\n\n同样的正文。",
+            store=store, embedder=FakeEmbedder(),
+        )
+    )
+
+    assert set(store.documents) == {"a.md", "b.md"}
+    assert store.documents["a.md"].id != store.documents["b.md"].id
+
+
+def test_content_ingestion_dry_run_writes_nothing():
+    store, embedder = RecordingStore(), FakeEmbedder()
+
+    result = asyncio.run(
+        ingest_content(
+            source_file="orders.md",
+            content=MARKDOWN_DOC,
+            store=store,
+            embedder=embedder,
+            dry_run=True,
+        )
+    )
+
+    # action 说的是**内容层面**该做什么，dry_run 说的是**这次有没有真写**
+    assert result.action == "insert"
+    assert result.dry_run is True
+    assert result.written is False
+    assert result.document_id is None  # 没写，自然没有 id
+    assert store.documents == {}
+    assert store.writes == []
+    assert embedder.calls == []
+
+
+def test_content_ingestion_rejects_empty_content_without_touching_the_store():
+    """空文档报错，而不是「成功入库 0 个切片」。
+
+    后者会让调用方以为上传成功了，而知识库里什么都没有——
+    等检索不到才发现，那时离现场已经很远。
+    """
+    for blank in ("", "   ", "\n\n\t\n"):
+        store, embedder = RecordingStore(), FakeEmbedder()
+
+        with pytest.raises(EmptyDocumentError):
+            asyncio.run(
+                ingest_content(
+                    source_file="empty.md", content=blank, store=store, embedder=embedder
+                )
+            )
+
+        assert store.documents == {}
+        assert embedder.calls == []
+
+
+def test_content_ingestion_rejects_unsupported_types_before_any_work():
+    store, embedder = RecordingStore(), FakeEmbedder()
+
+    with pytest.raises(UnsupportedDocumentTypeError):
+        asyncio.run(
+            ingest_content(
+                source_file="report.docx",
+                content="随便什么内容",
+                file_type="docx",
+                store=store,
+                embedder=embedder,
+            )
+        )
+
+    # 类型不对就该在第一步失败，不该先切出一堆东西再发现
+    assert store.documents == {}
+    assert embedder.calls == []
+
+
+def test_content_ingestion_never_calls_embedding_for_unchanged_content():
+    """再钉一次幂等的核心：第二次上传同一份文档，一次 API 都不该调。"""
+    store = RecordingStore()
+    asyncio.run(
+        ingest_content(
+            source_file="orders.md", content=MARKDOWN_DOC, store=store, embedder=FakeEmbedder()
+        )
+    )
+
+    embedder = FakeEmbedder()
+    asyncio.run(
+        ingest_content(
+            source_file="orders.md", content=MARKDOWN_DOC, store=store, embedder=embedder
+        )
+    )
+
+    assert embedder.calls == []
+    assert embedder.total_texts == 0
+
+
+def test_content_ingestion_only_reembeds_changed_chunks():
+    """改一节就只重算一节——和目录那条路一样。"""
+    store = RecordingStore()
+    asyncio.run(
+        ingest_content(
+            source_file="orders.md", content=MARKDOWN_DOC, store=store, embedder=FakeEmbedder()
+        )
+    )
+
+    embedder = FakeEmbedder()
+    result = asyncio.run(
+        ingest_content(
+            source_file="orders.md",
+            content=MARKDOWN_DOC.replace(
+                "客单价 = 销售额 / 订单数。", "客单价 = 销售额 / 订单数，按去重订单数计算。"
+            ),
+            store=store,
+            embedder=embedder,
+        )
+    )
+
+    assert result.embedded_chunks == 1
+    assert embedder.total_texts == 1
+
+
+def test_content_ingestion_rejects_non_string_content():
+    store = RecordingStore()
+
+    with pytest.raises(EmptyDocumentError):
+        asyncio.run(
+            ingest_content(
+                source_file="a.md", content=b"\xe4\xba\x8c\xe8\xbf\x9b\xe5\x88\xb6",
+                store=store, embedder=FakeEmbedder(),
+            )
+        )
+
+
+def test_content_and_directory_paths_agree_on_the_same_document(tmp_path):
+    """★ 两条入口对同一份内容必须得出同样的切片结果。
+
+    否则「目录同步进来的文档」和「上传进来的同一份文档」会被判成
+    两份不同的内容，互相覆盖、反复重算向量。
+    """
+    write_doc(tmp_path, "orders.md", MARKDOWN_DOC)
+
+    directory_store = RecordingStore()
+    asyncio.run(run_ingest(tmp_path, directory_store, FakeEmbedder()))
+
+    content_store = RecordingStore()
+    asyncio.run(
+        ingest_content(
+            source_file="orders.md",
+            content=MARKDOWN_DOC,
+            store=content_store,
+            embedder=FakeEmbedder(),
+        )
+    )
+
+    from_directory = directory_store.writes[-1]
+    from_content = content_store.writes[-1]
+
+    assert from_directory.document_title == from_content.document_title
+    assert from_directory.content_hash == from_content.content_hash
+    assert [r.chunk.content for r in from_directory.records] == [
+        r.chunk.content for r in from_content.records
+    ]
+
+
+def test_injected_store_means_no_database_is_touched(monkeypatch):
+    """注入 store 时**一次都不该去连数据库**。
+
+    这条不是「间接看得出来」而已：本机数据库是开着的，测试光跑过不能证明
+    它没连。这里把 get_engine 换成一调用就炸的桩——真去连就会当场失败。
+    整套单元测试因此可以完全不依赖 PostgreSQL 运行。
+    """
+
+    def explode():
+        raise AssertionError("注入 store 之后不该再自己去连数据库")
+
+    monkeypatch.setattr(knowledge_ingestion, "get_engine", explode)
+
+    store, embedder = RecordingStore(), FakeEmbedder()
+    result = asyncio.run(
+        ingest_content(
+            source_file="orders.md", content=MARKDOWN_DOC, store=store, embedder=embedder
+        )
+    )
+
+    assert result.action == "insert"
+
+
+def test_content_entry_point_signature_matches_the_agreed_contract():
+    """公开入口的签名就是约定的那份——四个业务参数，title 可省。"""
+    import inspect
+
+    parameters = inspect.signature(ingest_knowledge_document_from_content).parameters
+
+    for name in ("source_file", "content", "file_type", "title"):
+        assert name in parameters, name
+    assert parameters["title"].default is None
+    # 全部关键字传入：位置参数容易把 source_file 和 content 传反，而它们都是 str，
+    # 传反了不会报错，只会安静地把正文当文件名
+    assert all(
+        parameters[name].kind is inspect.Parameter.KEYWORD_ONLY
+        for name in ("source_file", "content", "file_type", "title")
+    )
+
+
+def test_directory_entry_point_still_has_its_original_signature():
+    """回归：老的目录入口签名没被这次重构改掉。"""
+    import inspect
+
+    parameters = inspect.signature(ingest_knowledge).parameters
+
+    assert "directory" in parameters
+    assert all(
+        parameters[name].kind is inspect.Parameter.KEYWORD_ONLY
+        for name in ("store", "embedder", "embedding_model", "batch_size", "dry_run")
+    )

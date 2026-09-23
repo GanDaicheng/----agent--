@@ -498,16 +498,34 @@ def _imported_modules(path: pathlib.Path) -> set[str]:
     return modules
 
 
-def test_chunking_module_imports_only_standard_library():
-    """切片模块必须保持零依赖：它是纯函数，不该够得着网络、数据库或配置。"""
+# 切片模块允许依赖的项目内模块。**必须都是纯模块**（无 I/O、无外部系统）。
+#
+# 写成显式白名单而不是「随便 import 什么都行」：多加一个就要在这里登记一次，
+# 逼着人想清楚「它是不是纯的」。下面那组 forbidden 参数化测试继续逐条挡着
+# openai / sqlalchemy / 配置 这些真正危险的东西。
+ALLOWED_PROJECT_MODULES = ("app.services.document_normalization",)
+
+
+def test_chunking_module_only_depends_on_stdlib_and_pure_project_modules():
+    """切片模块必须保持纯：不该够得着网络、数据库、配置或任何外部系统。
+
+    这条原来写的是「只 import 标准库」。加入「从内容切片」之后，它需要复用
+    document_normalization 里的 BOM / 换行归一与标题兜底——那是个纯模块
+    （只 import pathlib 和 AppError），没有违反这条不变量的**本意**。
+    所以从「只准标准库」放宽成「标准库 + 显式登记的项目内纯模块」。
+
+    比较用前缀而不是全等：_imported_modules 会把 `from x import Y` 记成
+    两条（`x` 和 `x.Y`），只比全等的话 `x.Y` 会被误判成越界。
+    """
     modules = _imported_modules(pathlib.Path(knowledge_chunking.__file__))
 
-    non_stdlib = {
+    unexpected = {
         module
         for module in modules
         if module.split(".")[0] not in sys.stdlib_module_names
+        and not module.startswith(ALLOWED_PROJECT_MODULES)
     }
-    assert not non_stdlib, f"切片模块引入了非标准库依赖：{sorted(non_stdlib)}"
+    assert not unexpected, f"切片模块引入了未登记的依赖：{sorted(unexpected)}"
 
 
 @pytest.mark.parametrize(
