@@ -13,7 +13,9 @@ from app.agent.data_query.constants import (
     NODE_FINISH,
     NODE_GENERATE_SQL,
     NODE_INTAKE,
+    NODE_KNOWLEDGE_ANSWER,
     NODE_REPAIR_SQL,
+    NODE_SEARCH_KNOWLEDGE,
     NODE_SUGGEST_VISUALIZATION,
     NODE_UNDERSTAND_QUESTION,
     NODE_VALIDATE_SQL,
@@ -126,10 +128,12 @@ PUBLIC_EVENT_TEXT: dict[str, str] = {
     NODE_INTAKE: "已接收问题",
     NODE_UNDERSTAND_QUESTION: "已识别问题类型",
     NODE_DISCOVER_ASSETS: "已匹配可用数据资产",
+    NODE_KNOWLEDGE_ANSWER: "已从业务知识库作答",
     NODE_GENERATE_SQL: "已生成查询方案",
     NODE_VALIDATE_SQL: "已完成查询安全校验",
     NODE_REPAIR_SQL: "已尝试修复查询方案",
     NODE_EXECUTE_QUERY: "已完成数据查询",
+    NODE_SEARCH_KNOWLEDGE: "已检查知识库",
     NODE_EXPLAIN_RESULT: "已生成分析结论",
     NODE_SUGGEST_VISUALIZATION: "已生成图表建议",
     NODE_FINISH: "分析流程已完成",
@@ -226,6 +230,21 @@ class AgentChartSuggestionResponse(BaseModel):
     reason: str
 
 
+class AgentKnowledgeSourceResponse(BaseModel):
+    """回答所参考的一条知识库资料。
+
+    只有能给人看的字段：没有正文全文（那是喂给模型的内部数据）、
+    没有 embedding、没有 chunk_id。preview 是后端截好的摘要，
+    与 /api/v1/rag/answer 的 sources 同源同形状。
+    """
+
+    source_file: str
+    document_title: str
+    section_title: str
+    similarity: float
+    preview: str
+
+
 class AgentDataQueryResponse(BaseModel):
     """智能问数的对外响应。
 
@@ -236,6 +255,10 @@ class AgentDataQueryResponse(BaseModel):
     - "error" ：Agent 内部写了受控 error（意图识别失败、数据服务不可用等）。
 
     两种都是 HTTP 200：能给出一个安全、完整的回答，就说明服务本身是好的。
+
+    knowledge_sources 是本次回答参考的知识库小节（没有查知识库时为 []）。
+    它**只是解释的来源，不是数字的来源**——数字永远来自 query_result。
+    前端可以据此展示「参考知识来源」，不展示也不影响其它字段。
     """
 
     status: Literal["ok", "error"]
@@ -243,6 +266,7 @@ class AgentDataQueryResponse(BaseModel):
     query_result: AgentQueryResultResponse | None
     chart_suggestion: AgentChartSuggestionResponse | None
     events: list[str]
+    knowledge_sources: list[AgentKnowledgeSourceResponse] = Field(default_factory=list)
 
 
 class AgentResponseContractError(Exception):
@@ -422,6 +446,35 @@ def _to_chart_suggestion(raw: object) -> AgentChartSuggestionResponse | None:
         raise AgentResponseContractError("chart_suggestion 字段不符合契约。") from exc
 
 
+def _to_knowledge_sources(raw: object) -> list[AgentKnowledgeSourceResponse]:
+    """把 State 里的 knowledge_sources 转成公开模型列表。
+
+    这里用 `model_validate(..., extra="ignore")` 的默认行为有意留了一道保护：
+    State 里那份 KnowledgeSource **只有安全字段**，但就算将来有人往它里面
+    加了 content / embedding，Pydantic 也只会取声明的这五个字段，
+    多余的键不会顺着响应漏出去。
+
+    形状不对时**不抛异常**：知识来源只是解释的附件，为它让整个请求失败
+    （500）得不偿失。这里退化成空列表——用户少看到几条来源，
+    但回答和数据都还在。
+    """
+    if not raw:
+        return []
+
+    if not isinstance(raw, (list, tuple)):
+        return []
+
+    sources: list[AgentKnowledgeSourceResponse] = []
+    for item in raw:
+        if not isinstance(item, Mapping):
+            continue
+        try:
+            sources.append(AgentKnowledgeSourceResponse.model_validate(dict(item)))
+        except ValidationError:
+            continue
+    return sources
+
+
 def build_agent_response(state: object) -> AgentDataQueryResponse:
     """把 Agent 的 State 筛成可以安全外发的响应。
 
@@ -429,9 +482,12 @@ def build_agent_response(state: object) -> AgentDataQueryResponse:
     因此可以脱离 HTTP 直接单测各种畸形 State。
 
     这里做的是「白名单式」的字段挑选——只取 answer / query_result /
-    chart_suggestion / events 四项，逐项转换；State 里其余的键
-    （sql_draft、sql_validation、matched_assets、retry_count、intent、
-    error、question）根本不会被读出来，也就没有「忘记过滤」的风险。
+    chart_suggestion / events / knowledge_sources 五项，逐项转换；State 里
+    其余的键（sql_draft、sql_validation、matched_assets、retry_count、intent、
+    error、question、**knowledge_results**）根本不会被读出来，也就没有
+    「忘记过滤」的风险。knowledge_results 尤其要盯住：它带着知识切片的
+    **完整正文**，是喂模型的内部数据，绝不能出现在响应里——它不在白名单里，
+    所以拿不到。对外只走 knowledge_sources（只有 preview）。
     """
     if not isinstance(state, Mapping):
         raise AgentResponseContractError("Agent 返回的 State 不是键值结构。")
@@ -450,14 +506,16 @@ def build_agent_response(state: object) -> AgentDataQueryResponse:
     events = to_public_agent_events(state.get("events"))
 
     if error:
-        # 受控失败：不返回可能残留的 query_result / chart_suggestion。
-        # 出错时它们要么不存在，要么是上一次尝试的中间产物，一律不外发。
+        # 受控失败：不返回可能残留的 query_result / chart_suggestion /
+        # knowledge_sources。出错时它们要么不存在，要么是上一次尝试的
+        # 中间产物，一律不外发。
         return AgentDataQueryResponse(
             status="error",
             answer=answered,
             query_result=None,
             chart_suggestion=None,
             events=events,
+            knowledge_sources=[],
         )
 
     return AgentDataQueryResponse(
@@ -466,6 +524,7 @@ def build_agent_response(state: object) -> AgentDataQueryResponse:
         query_result=_to_query_result(state.get("query_result")),
         chart_suggestion=_to_chart_suggestion(state.get("chart_suggestion")),
         events=events,
+        knowledge_sources=_to_knowledge_sources(state.get("knowledge_sources")),
     )
 
 

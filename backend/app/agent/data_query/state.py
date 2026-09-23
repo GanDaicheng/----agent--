@@ -95,6 +95,42 @@ class ChartSuggestion(TypedDict):
     reason: str  # 为什么这么建议，用于调试和前端提示
 
 
+class KnowledgeSnippet(TypedDict, total=False):
+    """检索到的一条知识片段，**供解释提示词使用**。
+
+    和 KnowledgeSource 的区别只有一处，但很要紧：这里带 `content`（完整正文），
+    因为模型要「够料」才解释得清。拿 120 字的预览去解释「为什么 12 月销售额高」，
+    真正的理由那一段很可能正好被截掉，模型就只能含糊其辞。
+
+    它**不对外暴露**：State 会流到接口层，而接口只取 KnowledgeSource 那几个字段。
+    两个类型分开写，是为了让「内部有全文、对外只有预览」这条边界落在类型上，
+    而不是靠每个调用方自觉。
+    """
+
+    source_file: str
+    document_title: str
+    section_title: str
+    chunk_index: int
+    content: str  # 完整正文，仅内部使用
+    similarity: float
+
+
+class KnowledgeSource(TypedDict, total=False):
+    """对外的知识来源。**只有能给人看的字段**。
+
+    没有 content（正文全文），没有 embedding，没有 content_for_embedding——
+    预览用后端截好的 preview，与 /api/v1/rag/answer 的 sources 保持同一形状，
+    前端两处可以复用同一套渲染逻辑。
+    """
+
+    source_file: str
+    document_title: str
+    section_title: str
+    chunk_index: int
+    preview: str  # 截断后的摘要，约 120 字
+    similarity: float
+
+
 class DataQueryState(TypedDict, total=False):
     """智能问数 Agent 的完整 State。
 
@@ -117,6 +153,16 @@ class DataQueryState(TypedDict, total=False):
     query_result: QueryResult  # execute_query 写，explain_result 读
     answer: str  # explain_result 写（本次由 finish 写占位内容），对外返回
     chart_suggestion: ChartSuggestion  # suggest_visualization 写，前端据此渲染图表
+
+    # ---- 知识库（RAG）阶段 ----
+    # 这五个字段的存在**不改变任何 SQL 相关的东西**：知识库只提供口径与解释，
+    # 数字仍然只来自 query_result。见 knowledge.py 的说明。
+    needs_knowledge: bool  # 规则判定「这个问题要不要查知识库」，search_knowledge_if_needed 写
+    knowledge_results: list[KnowledgeSnippet]  # 内部用（含全文），解释节点读
+    knowledge_sources: list[KnowledgeSource]  # 对外用（只有预览），接口层读
+    # 知识库检索失败的原因。**它不是 error**：知识库挂了不该拖垮问数主链路，
+    # 所以单独一个字段记录，error 仍然只表示「问数流程本身失败了」。
+    knowledge_error: str | None
 
     # ---- 流程控制 ----
     retry_count: int  # SQL 修复次数，上限见 constants.MAX_SQL_RETRY

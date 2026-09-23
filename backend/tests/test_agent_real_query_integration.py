@@ -58,6 +58,7 @@ from tests.test_data_query_graph import (
     TREND_SQL,
     FakeChartSuggester,
     FakeClassifier,
+    FakeKnowledgeSearcher,
     FakeResultExplainer,
     FakeSqlGenerator,
     FakeSqlRepairer,
@@ -96,7 +97,12 @@ class FakeQueryExecutor:
 
 
 def graph_with_executor(executor, **overrides):
-    """用指定的执行器 + 全套假模型构建图。"""
+    """用指定的执行器 + 全套假模型构建图。
+
+    知识库检索也换成替身：真实那个要连 pgvector、还要调一次百炼 embedding，
+    留着它本文件的测试就会真的发网络请求——既慢又花钱，
+    还破坏「pytest 不碰外部世界」这条约定。
+    """
     kwargs = {
         "classifier": FakeClassifier(),
         "sql_generator": FakeSqlGenerator(),
@@ -104,6 +110,7 @@ def graph_with_executor(executor, **overrides):
         "query_executor": executor,
         "result_explainer": FakeResultExplainer(),
         "chart_suggester": FakeChartSuggester(),
+        "knowledge_searcher": FakeKnowledgeSearcher(),
     }
     kwargs.update(overrides)
     return SyncGraph(build_graph(**kwargs))
@@ -537,6 +544,7 @@ def test_production_graph_actually_calls_the_data_service(monkeypatch):
     monkeypatch.setattr(query_execution, "execute_safe_query", fake_service)
 
     # 不传 query_executor → 用默认的真实执行器
+    # （知识库检索仍然要换替身：本用例测的是查询那条路，不该顺带去连 pgvector）
     graph = SyncGraph(
         build_graph(
             classifier=FakeClassifier(),
@@ -544,6 +552,7 @@ def test_production_graph_actually_calls_the_data_service(monkeypatch):
             sql_repairer=FakeSqlRepairer(),
             result_explainer=FakeResultExplainer(),
             chart_suggester=FakeChartSuggester(),
+            knowledge_searcher=FakeKnowledgeSearcher(),
         )
     )
     result = graph.invoke({"question": QUESTION})

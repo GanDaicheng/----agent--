@@ -38,7 +38,9 @@ from app.agent.data_query.constants import (
     NODE_FINISH,
     NODE_GENERATE_SQL,
     NODE_INTAKE,
+    NODE_KNOWLEDGE_ANSWER,
     NODE_REPAIR_SQL,
+    NODE_SEARCH_KNOWLEDGE,
     NODE_SUGGEST_VISUALIZATION,
     NODE_UNDERSTAND_QUESTION,
     NODE_VALIDATE_SQL,
@@ -292,9 +294,10 @@ class FakeMockExecutor:
 class FakeResultExplainer:
     """结果解释器的测试替身：绝不调用模型。
 
-    它记录每次收到的 question / intent / query_result —— 这是本文件里
-    唯一能证明「模型到底看到了什么」的手段。真实模型不会告诉你
-    它收到了哪几个字段、有没有夹带 SQL。
+    它记录每次收到的 question / intent / query_result / knowledge_snippets ——
+    这是本文件里唯一能证明「模型到底看到了什么」的手段。
+    真实模型不会告诉你它收到了哪几个字段、有没有夹带 SQL，
+    也不会告诉你它有没有拿到知识库资料。
     """
 
     def __init__(
@@ -309,12 +312,21 @@ class FakeResultExplainer:
         self.raw = raw
         self.calls: list[dict] = []
 
-    def __call__(self, *, question: str, intent: str, query_result: QueryResult):
+    def __call__(
+        self,
+        *,
+        question: str,
+        intent: str,
+        query_result: QueryResult,
+        knowledge_snippets=None,
+    ):
         self.calls.append(
             {
                 "question": question,
                 "intent": intent,
                 "query_result": query_result,
+                # 记下来才能断言「知识库结果确实传到了模型面前」
+                "knowledge_snippets": list(knowledge_snippets or []),
             }
         )
         if self.raises is not None:
@@ -322,6 +334,72 @@ class FakeResultExplainer:
         if self.raw is not _UNSET:
             return self.raw
         return ResultExplanation(answer=self.answer)
+
+
+class FakeKnowledgeSearcher:
+    """知识库检索的测试替身：**绝不连数据库、绝不调 embedding**。
+
+    这个替身不是可选的。测试图用 build_graph() 接线，而 knowledge_searcher
+    的缺省值是真实实现——它要连 pgvector、还要调一次百炼 embedding。
+    不换掉它，任何带「为什么」「复购」等关键词的测试问题都会真的发一次
+    网络请求：既慢，又花了钱，还让「pytest 不碰外部世界」这条约定失效。
+
+    它记录每次收到的 question，用来证明该查的时候查了、不该查的时候没查。
+    """
+
+    def __init__(
+        self,
+        snippets: list | None = None,
+        sources: list | None = None,
+        *,
+        raises: Exception | None = None,
+    ) -> None:
+        self.snippets = list(snippets or [])
+        self.sources = list(sources or [])
+        self.raises = raises
+        self.calls: list[str] = []
+
+    async def __call__(self, question: str, top_k: int = 3):
+        self.calls.append(question)
+        if self.raises is not None:
+            raise self.raises
+        return list(self.snippets), list(self.sources)
+
+
+class FakeKnowledgeAnswerer:
+    """「只查知识库作答」那条路的替身：**绝不连数据库、绝不调 embedding / LLM**。
+
+    和 FakeKnowledgeSearcher 一样不是可选的——真实的那个会走完整的
+    RAG 链路（检索 + 调模型）。测试图必须换掉它，否则一个
+    「客单价怎么算？」的测试问题就会真的发两次网络请求。
+    """
+
+    def __init__(self, answer=None, *, raises: Exception | None = None) -> None:
+        self.answer = answer if answer is not None else make_fake_rag_answer()
+        self.raises = raises
+        self.calls: list[str] = []
+
+    async def __call__(self, question: str):
+        self.calls.append(question)
+        if self.raises is not None:
+            raise self.raises
+        return self.answer
+
+
+def make_fake_rag_answer(*, status: str = "ok", answer: str | None = None, sources=()):
+    """构造一个 RagAnswer。延迟导入是为了不让本文件在收集阶段就依赖 rag_answer。"""
+    from app.services.rag_answer import RagAnswer
+
+    default_answer = {
+        "ok": "客单价等于销售额除以订单数。",
+        "insufficient": "当前知识库没有足够信息回答该问题。",
+        "no_knowledge": "当前知识库还没有可检索的资料，请先导入知识文档。",
+    }[status]
+    return RagAnswer(
+        status=status,  # type: ignore[arg-type]
+        answer=answer if answer is not None else default_answer,
+        sources=tuple(sources),
+    )
 
 
 class FakeChartSuggester:
@@ -409,14 +487,19 @@ def graph_with(
     query_executor: FakeMockExecutor | None = None,
     result_explainer: FakeResultExplainer | None = None,
     chart_suggester: FakeChartSuggester | None = None,
+    knowledge_searcher: FakeKnowledgeSearcher | None = None,
+    knowledge_answerer: FakeKnowledgeAnswerer | None = None,
 ):
-    """构建注入了六个替身的 Graph——单元测试的默认入口。
+    """构建注入了八个替身的 Graph——单元测试的默认入口。
 
-    六个参数都有非 None 的默认值，所以 `graph_with()` 永远不会碰到真实模型，
-    也不会碰到真实数据库。
+    八个参数都有非 None 的默认值，所以 `graph_with()` 永远不会碰到真实模型，
+    也不会碰到真实数据库，**也不会碰到真实的 pgvector 检索或 RAG 答疑**。
 
     默认的 repairer 返回 TREND_SQL，也就是「修复成功」。
     想测「修了还是不行」，显式传 FakeSqlRepairer(sql=BAD_SQL)。
+
+    默认的知识检索替身返回空结果（等价于「知识库里没有相关内容」）。
+    想测「检索到了资料」，显式传 FakeKnowledgeSearcher(snippets=[...], sources=[...])。
 
     返回的是 SyncGraph 而不是裸图：图里有异步节点，裸图只能 ainvoke。
     见 SyncGraph 的说明。
@@ -438,6 +521,16 @@ def graph_with(
             ),
             chart_suggester=(
                 chart_suggester if chart_suggester is not None else FakeChartSuggester()
+            ),
+            knowledge_searcher=(
+                knowledge_searcher
+                if knowledge_searcher is not None
+                else FakeKnowledgeSearcher()
+            ),
+            knowledge_answerer=(
+                knowledge_answerer
+                if knowledge_answerer is not None
+                else FakeKnowledgeAnswerer()
             ),
         )
     )
@@ -462,10 +555,12 @@ def test_graph_can_be_compiled():
         NODE_INTAKE,
         NODE_UNDERSTAND_QUESTION,
         NODE_DISCOVER_ASSETS,
+        NODE_KNOWLEDGE_ANSWER,
         NODE_GENERATE_SQL,
         NODE_VALIDATE_SQL,
         NODE_REPAIR_SQL,
         NODE_EXECUTE_QUERY,
+        NODE_SEARCH_KNOWLEDGE,
         NODE_EXPLAIN_RESULT,
         NODE_SUGGEST_VISUALIZATION,
         NODE_FINISH,
@@ -480,21 +575,23 @@ def test_production_graph_is_cached_separately_from_test_graphs():
 
 def test_nodes_are_wired_in_order():
     """直线段：intake → understand_question → discover_assets，
-    generate_sql → validate_sql，execute_query → explain_result →
-    suggest_visualization → finish，以及 repair_sql → validate_sql 这条回边。"""
+    generate_sql → validate_sql，execute_query → search_knowledge_if_needed →
+    explain_result → suggest_visualization → finish，以及 repair_sql →
+    validate_sql 这条回边。"""
     edges = {(edge.source, edge.target) for edge in build_graph().get_graph().edges}
 
     assert (NODE_INTAKE, NODE_UNDERSTAND_QUESTION) in edges
     assert (NODE_UNDERSTAND_QUESTION, NODE_DISCOVER_ASSETS) in edges
     assert (NODE_GENERATE_SQL, NODE_VALIDATE_SQL) in edges
-    assert (NODE_EXECUTE_QUERY, NODE_EXPLAIN_RESULT) in edges
+    assert (NODE_EXECUTE_QUERY, NODE_SEARCH_KNOWLEDGE) in edges
+    assert (NODE_SEARCH_KNOWLEDGE, NODE_EXPLAIN_RESULT) in edges
     assert (NODE_EXPLAIN_RESULT, NODE_SUGGEST_VISUALIZATION) in edges
     assert (NODE_SUGGEST_VISUALIZATION, NODE_FINISH) in edges
     assert (NODE_REPAIR_SQL, NODE_VALIDATE_SQL) in edges
 
 
 def test_execute_query_never_leads_straight_to_finish():
-    """执行结果必须先经过解释节点，不能直接进 finish。
+    """执行结果必须先经过知识库检索与解释节点，不能直接进 finish。
 
     少了 explain_result 这一跳，用户看到的就是「返回了 6 行」这种执行日志，
     而不是分析结论——功能上「能跑」，体验上等于白做。
@@ -504,7 +601,18 @@ def test_execute_query_never_leads_straight_to_finish():
     edges = {(edge.source, edge.target) for edge in build_graph().get_graph().edges}
 
     assert (NODE_EXECUTE_QUERY, NODE_FINISH) not in edges
-    assert (NODE_EXECUTE_QUERY, NODE_EXPLAIN_RESULT) in edges
+    assert (NODE_EXECUTE_QUERY, NODE_SEARCH_KNOWLEDGE) in edges
+
+
+def test_execute_query_never_skips_the_knowledge_node():
+    """执行结果也不能直接进 explain_result——那样知识库就永远接不上了。
+
+    这条守的是「接入知识库」这件事本身：如果有人把它从链路里摘掉
+    （把边改回 execute_query → explain_result），这个测试立刻红。
+    """
+    edges = {(edge.source, edge.target) for edge in build_graph().get_graph().edges}
+
+    assert (NODE_EXECUTE_QUERY, NODE_EXPLAIN_RESULT) not in edges
 
 
 def test_explain_result_never_leads_straight_to_finish():
@@ -516,11 +624,27 @@ def test_explain_result_never_leads_straight_to_finish():
 
 
 def test_execute_query_has_exactly_one_outgoing_edge():
-    """execute_query 的普通后继**有且仅有** explain_result 一个。"""
+    """execute_query 的普通后继**有且仅有** search_knowledge_if_needed 一个。"""
     outgoing = [
         edge.target
         for edge in build_graph().get_graph().edges
         if edge.source == NODE_EXECUTE_QUERY
+    ]
+
+    assert outgoing == [NODE_SEARCH_KNOWLEDGE]
+
+
+def test_search_knowledge_leads_only_to_explain_result():
+    """知识库节点之后必然是解释节点，中间不再分叉。
+
+    「要不要查」是节点内部的规则判断，不是图上的分叉——所以这里只该有一条边。
+    如果哪天有人给它加了条件边，这条会红，提醒他那个判断已经有地方放了
+    （knowledge.py），别再摆一份到图结构里。
+    """
+    outgoing = [
+        edge.target
+        for edge in build_graph().get_graph().edges
+        if edge.source == NODE_SEARCH_KNOWLEDGE
     ]
 
     assert outgoing == [NODE_EXPLAIN_RESULT]
@@ -579,10 +703,10 @@ def test_execute_query_is_only_reachable_through_a_conditional_edge():
 
 
 def test_assets_node_branches_conditionally():
-    """discover_assets 之后必须是条件边，且两个出口都存在。
+    """discover_assets 之后必须是条件边，且三个出口都存在。
 
     漏配任何一个出口，route_after_assets 一旦返回那个名字，
-    LangGraph 运行时就会直接报错——所以这两条边一起断言。
+    LangGraph 运行时就会直接报错——所以这几条边一起断言。
     """
     conditional = {
         (edge.source, edge.target)
@@ -592,15 +716,20 @@ def test_assets_node_branches_conditionally():
 
     assert {
         (NODE_DISCOVER_ASSETS, NODE_GENERATE_SQL),
+        (NODE_DISCOVER_ASSETS, NODE_KNOWLEDGE_ANSWER),
         (NODE_DISCOVER_ASSETS, NODE_FINISH),
     } <= conditional
 
 
 def test_validation_node_branches_conditionally():
-    """validate_sql 之后必须是条件边，三个出口都要有。
+    """条件边一共就这六条，多一条少一条都要在这里显式登记。
 
-    少了 repair_sql 那条，修复路就断了；少了 execute_query 那条，
-    校验通过的结果就白算了。
+    validate_sql 的三个出口：少了 repair_sql 那条，修复路就断了；
+    少了 execute_query 那条，校验通过的结果就白算了。
+    discover_assets 的三个出口：generate_sql 是正常问数；
+    answer_from_knowledge 是 unknown 但其实在问业务口径/原因的问题
+    （「客单价怎么算？」）—— 少了它，知识库对这类问题永远不可达；
+    finish 是真不是问数问题时的引导话术。
     """
     conditional = {
         (edge.source, edge.target)
@@ -610,6 +739,7 @@ def test_validation_node_branches_conditionally():
 
     assert conditional == {
         (NODE_DISCOVER_ASSETS, NODE_GENERATE_SQL),
+        (NODE_DISCOVER_ASSETS, NODE_KNOWLEDGE_ANSWER),
         (NODE_DISCOVER_ASSETS, NODE_FINISH),
         (NODE_VALIDATE_SQL, NODE_EXECUTE_QUERY),
         (NODE_VALIDATE_SQL, NODE_REPAIR_SQL),
@@ -636,7 +766,9 @@ def test_planned_nodes_are_registered_but_not_yet_implemented():
 def test_limits_are_registered():
     """上限常量先定下来，后续实现查询时直接引用。"""
     assert MAX_SQL_RETRY == 1
-    assert MAX_GRAPH_STEPS == 12
+    # 14 而不是 12：接入知识库节点后，最坏路径（触发一次 SQL 修复）正好是 12 步，
+    # 顶到上限没有余量，所以抬到 14。见 constants.MAX_GRAPH_STEPS 的逐步推算。
+    assert MAX_GRAPH_STEPS == 14
     assert MAX_SQL_LIMIT == 200
 
 
@@ -676,10 +808,15 @@ def test_the_only_back_edge_is_repair_sql_to_validate_sql():
         NODE_INTAKE,
         NODE_UNDERSTAND_QUESTION,
         NODE_DISCOVER_ASSETS,
+        # 放在 discover_assets 之后：它是从那里分出去的一条独立终点路径。
+        NODE_KNOWLEDGE_ANSWER,
         NODE_GENERATE_SQL,
         NODE_VALIDATE_SQL,
         NODE_REPAIR_SQL,
         NODE_EXECUTE_QUERY,
+        # 这两个知识库节点原先没列进来——不列就等于**整条边被跳过检查**，
+        # 回边检查看着通过，其实根本没看到它们。
+        NODE_SEARCH_KNOWLEDGE,
         NODE_EXPLAIN_RESULT,
         NODE_SUGGEST_VISUALIZATION,
         NODE_FINISH,
@@ -734,7 +871,9 @@ def test_the_full_repair_path_fits_within_the_step_limit():
 
     路径：intake → understand_question → discover_assets → generate_sql
         → validate_sql → repair_sql → validate_sql → execute_query
-        → explain_result → suggest_visualization → finish = 11 步。
+        → search_knowledge_if_needed → explain_result → suggest_visualization
+        → finish = 12 步。上限 14，留两步余量——正好卡在上限是最糟的配置，
+        以后再加一个节点就会突然抛 GraphRecursionError。
     """
     repairer = FakeSqlRepairer()
     result = graph_with(
@@ -743,14 +882,14 @@ def test_the_full_repair_path_fits_within_the_step_limit():
 
     assert len(repairer.calls) == 1
     assert result["sql_validation"]["passed"] is True
-    assert len(result["events"]) == 11 < MAX_GRAPH_STEPS
+    assert len(result["events"]) == 12 < MAX_GRAPH_STEPS
 
 
-def test_the_first_pass_path_is_nine_steps():
+def test_the_first_pass_path_is_ten_steps():
     """首次正常通过的路径：比修复路径少两步（repair_sql + 第二次 validate_sql）。"""
     result = graph_with().invoke({"question": QUESTION})
 
-    assert len(result["events"]) == 9 < MAX_GRAPH_STEPS
+    assert len(result["events"]) == 10 < MAX_GRAPH_STEPS
 
 
 # ---------------------------- 意图识别的契约 ----------------------------
@@ -955,19 +1094,20 @@ def test_normal_question_reaches_finish():
 
 
 def test_normal_question_records_events_from_every_node():
-    """events 用的是追加语义：九个节点各记一条，谁也没覆盖谁。"""
+    """events 用的是追加语义：十个节点各记一条，谁也没覆盖谁。"""
     events = graph_with().invoke({"question": QUESTION})["events"]
 
-    assert len(events) == 9
+    assert len(events) == 10
     assert events[0].startswith(NODE_INTAKE)
     assert events[1].startswith(NODE_UNDERSTAND_QUESTION)
     assert events[2].startswith(NODE_DISCOVER_ASSETS)
     assert events[3].startswith(NODE_GENERATE_SQL)
     assert events[4].startswith(NODE_VALIDATE_SQL)
     assert events[5].startswith(NODE_EXECUTE_QUERY)
-    assert events[6].startswith(NODE_EXPLAIN_RESULT)
-    assert events[7].startswith(NODE_SUGGEST_VISUALIZATION)
-    assert events[8].startswith(NODE_FINISH)
+    assert events[6].startswith(NODE_SEARCH_KNOWLEDGE)
+    assert events[7].startswith(NODE_EXPLAIN_RESULT)
+    assert events[8].startswith(NODE_SUGGEST_VISUALIZATION)
+    assert events[9].startswith(NODE_FINISH)
     assert QUESTION in events[0]
 
 
@@ -2243,7 +2383,7 @@ def test_explanation_message_has_no_sql_parameter():
     """
     params = set(inspect.signature(build_explanation_message).parameters)
 
-    assert params == {"question", "intent", "query_result"}
+    assert params == {"question", "intent", "query_result", "knowledge_snippets"}
     assert not any("sql" in name for name in params)
 
 
@@ -2252,7 +2392,7 @@ def test_explainer_entry_point_has_no_sql_parameter():
 
     params = set(inspect.signature(explain_query_result).parameters)
 
-    assert params == {"question", "intent", "query_result", "llm"}
+    assert params == {"question", "intent", "query_result", "knowledge_snippets", "llm"}
 
 
 def test_build_explanation_message_carries_all_three_inputs():
@@ -2310,7 +2450,7 @@ def test_normal_result_is_explained_once():
     assert result["query_result"]["row_count"] == 6
     assert result["retry_count"] == 0
     assert (
-        result["events"][6]
+        result["events"][7]
         == "explain_result：已基于 6 行查询结果生成分析结论"
     )
 
@@ -2320,11 +2460,23 @@ def test_explainer_receives_the_result_object_not_a_copy_of_the_state():
 
     这条断言守的是最小暴露原则：模型只该看到它要解读的那份数据，
     不该顺手拿到问题之外的 State 字段。
+
+    接入知识库后多了一个 knowledge_snippets——它是**有意新增的输入**
+    （解释「为什么」要用），不是「把 State 整份递过去」。
+    所以这里列的是白名单：多出任何一个名字都说明有人把 State 泄进去了。
     """
     explainer = FakeResultExplainer()
     graph_with(result_explainer=explainer).invoke({"question": QUESTION})
 
-    assert set(explainer.calls[0]) == {"question", "intent", "query_result"}
+    assert set(explainer.calls[0]) == {
+        "question",
+        "intent",
+        "query_result",
+        "knowledge_snippets",
+    }
+    # 尤其不能出现 SQL 和整份 State
+    assert "sql_draft" not in explainer.calls[0]
+    assert "state" not in explainer.calls[0]
 
 
 def test_explain_result_does_not_touch_the_query_result():
@@ -2363,7 +2515,7 @@ def test_empty_result_skips_the_model_entirely():
     assert explainer.calls == []
     assert "error" not in result
     assert result["answer"] == f"{EMPTY_RESULT_ANSWER}\n\n{MOCK_SOURCE_NOTE}"
-    assert result["events"][6] == "explain_result：查询结果为空，跳过模型解释"
+    assert result["events"][7] == "explain_result：查询结果为空，跳过模型解释"
     # 图正常结束，不是一个半途而废的流程
     assert result["events"][-1].startswith(NODE_FINISH)
     assert result["retry_count"] == 0
@@ -2404,7 +2556,7 @@ def test_explainer_failure_returns_a_safe_error():
 
     assert result["error"] == EXPLANATION_ERROR_MESSAGE
     assert "answer" not in result
-    assert result["events"][6] == "explain_result：分析结论生成失败（ConnectionError）"
+    assert result["events"][7] == "explain_result：分析结论生成失败（ConnectionError）"
     # 结果本身要留着——排查「模型看到了什么」全靠它
     assert result["query_result"]["row_count"] == 6
     # 不重试模型：额度是给 SQL 修复用的，解释失败不消耗它
@@ -2840,7 +2992,7 @@ def test_suggest_visualization_only_writes_the_chart_and_events():
 def test_suggest_visualization_event_names_the_chart_type():
     result = graph_with().invoke({"question": QUESTION})
 
-    assert result["events"][7] == "suggest_visualization：建议使用 line 图表"
+    assert result["events"][8] == "suggest_visualization：建议使用 line 图表"
 
 
 def test_empty_result_still_gets_a_chart_suggestion():
@@ -2866,7 +3018,7 @@ def test_empty_result_still_gets_a_chart_suggestion():
     assert result["chart_suggestion"] == EMPTY_CHART
     assert result["chart_suggestion"]["chart_type"] == "none"
     assert (
-        result["events"][7]
+        result["events"][8]
         == "suggest_visualization：当前结果不建议生成图表"
     )
 
@@ -2931,7 +3083,7 @@ def test_suggester_failure_returns_a_safe_error():
     assert result["error"] == CHART_SUGGESTION_ERROR_MESSAGE
     assert "chart_suggestion" not in result
     assert (
-        result["events"][7]
+        result["events"][8]
         == "suggest_visualization：图表建议生成失败（RuntimeError）"
     )
     # 图表失败不该动重试计数，也不该毁掉上游的成果

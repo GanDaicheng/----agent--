@@ -32,12 +32,30 @@ export type ChartSuggestion = {
   reason: string;
 };
 
+/**
+ * 回答参考的一条知识库资料。
+ *
+ * 注意它**只是解释的来源，不是数字的来源**——数字永远来自 query_result。
+ * 页面上的说明文字必须把这条边界讲清楚，否则用户会以为这些文档是数据出处。
+ *
+ * 标成可选是为了兼容还没上线这个字段的后端：缺席时按空数组处理，
+ * 页面只是不显示这一块，其它字段照常工作。
+ */
+export type KnowledgeSource = {
+  source_file: string;
+  document_title: string;
+  section_title: string;
+  similarity: number;
+  preview: string;
+};
+
 export type AgentDataQueryResponse = {
   status: "ok" | "error";
   answer: string;
   query_result: QueryResult | null;
   chart_suggestion: ChartSuggestion | null;
   events: string[];
+  knowledge_sources?: KnowledgeSource[];
 };
 
 /** 后端监听的端口。前端固定跑在 3000，后端固定跑在 8000。 */
@@ -117,6 +135,27 @@ function isChartSuggestion(value: unknown): value is ChartSuggestion {
   );
 }
 
+function isKnowledgeSource(value: unknown): value is KnowledgeSource {
+  if (!isRecord(value)) return false;
+  return (
+    typeof value.source_file === "string" &&
+    typeof value.document_title === "string" &&
+    typeof value.section_title === "string" &&
+    Number.isFinite(value.similarity) &&
+    typeof value.preview === "string"
+  );
+}
+
+/**
+ * 知识来源是**可选**的：后端老版本没有这个字段。
+ *
+ * 缺席时放行（页面按空数组处理），但一旦出现就必须是合法数组——
+ * 类型不对说明契约被改坏了，那种情况要报出来，不能悄悄当没有。
+ */
+function isKnowledgeSources(value: unknown): value is KnowledgeSource[] {
+  return Array.isArray(value) && value.every(isKnowledgeSource);
+}
+
 function isAgentDataQueryResponse(value: unknown): value is AgentDataQueryResponse {
   if (!isRecord(value)) return false;
   if (value.status !== "ok" && value.status !== "error") return false;
@@ -126,6 +165,9 @@ function isAgentDataQueryResponse(value: unknown): value is AgentDataQueryRespon
   }
   if (value.query_result !== null && !isQueryResult(value.query_result)) return false;
   if (value.chart_suggestion !== null && !isChartSuggestion(value.chart_suggestion)) {
+    return false;
+  }
+  if (value.knowledge_sources !== undefined && !isKnowledgeSources(value.knowledge_sources)) {
     return false;
   }
   return true;

@@ -43,6 +43,8 @@ export function QueryResultPanel({ result }: Props) {
   // 度量字段与它的展示格式都来自图表建议；表格只对这一列套格式
   const valueField = suggestion?.y_field ?? null;
   const valueFormat = suggestion?.value_format ?? null;
+  // 后端老版本没有这个字段，缺席时按空数组处理（那一块就不渲染）
+  const knowledgeSources = result.knowledge_sources ?? [];
 
   return (
     <div className={styles.page}>
@@ -56,6 +58,44 @@ export function QueryResultPanel({ result }: Props) {
         {/* 纯文本渲染：保留换行，但绝不按 HTML / Markdown 执行 */}
         <p className={styles.answer}>{result.answer}</p>
       </section>
+
+      {/* 参考知识来源。紧跟在结论之后：它是「为什么这么解释」的依据。
+          没有查知识库（或后端没返回这个字段）时整块不渲染，不留空框。 */}
+      {knowledgeSources.length > 0 ? (
+        <section className={styles.card} aria-labelledby="knowledge-heading">
+          <h2 id="knowledge-heading" className={styles.cardTitle}>
+            参考知识来源
+          </h2>
+          {/* 这条边界必须写在用户看得到的地方：数字来自查询结果，
+              文档只解释口径与原因。不写清楚，用户会以为数字出自这些文档。 */}
+          <p className={styles.cardCaption}>
+            本次回答参考的业务文档小节。数据结论来自查询结果，这些资料只用于解释口径与可能的原因。
+          </p>
+          <ul className={styles.knowledgeList}>
+            {knowledgeSources.map((source, index) => (
+              <li
+                key={`${source.source_file}-${source.section_title}-${index}`}
+                className={styles.knowledgeItem}
+              >
+                <div className={styles.knowledgeHead}>
+                  <span className={styles.knowledgeRank}>#{index + 1}</span>
+                  <span className={styles.knowledgeSection}>{source.section_title}</span>
+                  <span className={styles.knowledgeDoc}>{source.document_title}</span>
+                  <span className={styles.knowledgeSimilarity}>
+                    相似度 {source.similarity.toFixed(4)}
+                  </span>
+                </div>
+                {source.preview ? (
+                  <p className={styles.knowledgePreview} title="命中的文档原文（已截断）">
+                    {source.preview}
+                  </p>
+                ) : null}
+                <span className={styles.knowledgeFile}>{source.source_file}</span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
 
       <section className={styles.card} aria-labelledby="events-heading">
         <h2 id="events-heading" className={styles.cardTitle}>

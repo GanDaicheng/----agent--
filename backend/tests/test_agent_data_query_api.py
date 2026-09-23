@@ -119,7 +119,14 @@ def test_response_only_contains_the_public_fields(monkeypatch):
 
     body = post_question().json()
 
-    assert set(body) == {"status", "answer", "query_result", "chart_suggestion", "events"}
+    assert set(body) == {
+        "status",
+        "answer",
+        "query_result",
+        "chart_suggestion",
+        "events",
+        "knowledge_sources",
+    }
     assert set(body["query_result"]) == {"columns", "rows", "row_count", "source"}
     assert set(body["chart_suggestion"]) == {
         "chart_type",
@@ -249,6 +256,7 @@ def test_controlled_agent_error_does_not_expose_the_error_field(monkeypatch):
         "query_result",
         "chart_suggestion",
         "events",
+        "knowledge_sources",
     }
     # 内部异常类名不外发
     assert "ConnectionError" not in text

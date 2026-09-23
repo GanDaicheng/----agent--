@@ -5,51 +5,61 @@
     START → intake → understand_question → discover_assets
                                                     │
                                         route_after_assets（条件边）
-                                        ┌───────────┴───────────┐
-                                  generate_sql               finish
-                                        ↓
-                                  validate_sql ←──────────┐
-                                        │                 │
-                              route_after_validation      │
-                              （条件边）                   │
-                    ┌───────────────────┼──────────┐      │
-              校验通过              未通过且      未通过且  │
-                    │              还有额度      额度用完  │
-                    ↓                   │            │    │
-              execute_query      repair_sql ─────────┼────┘
-                    │                   │            │
-                    ↓                   │            │
-             explain_result             │            │
-                    │                   │            │
-                    ↓                   │            │
-         suggest_visualization          │            │
-                    │                   │            │
-                    └───────────────────┴────────────┘
+                              ┌─────────────────────┼──────────────┐
+                        generate_sql        answer_from_knowledge  finish
+                              ↓                      │              ↑
+                        validate_sql ←───────┐       │              │
+                              │              │       │              │
+                    route_after_validation   │       │              │
+                    （条件边）               │       │              │
+              ┌───────────────┼────────┐     │       │              │
+        校验通过        未通过且     未通过且 │       │              │
+              │        还有额度     额度用完 │       │              │
+              ↓             │          │     │       │              │
+        execute_query  repair_sql ─────┼─────┘       │              │
+              │             │          │             │              │
+              ↓             │          │             │              │
+  search_knowledge_if_needed│          │             │              │
+              │             │          │             │              │
+              ↓             │          │             │              │
+       explain_result       │          │             │              │
+              │             │          │             │              │
+              ↓             │          │             │              │
+   suggest_visualization    │          │             │              │
+              │             │          │             │              │
+              └─────────────┴──────────┴─────────────┴──────────────┘
                                         ↓
                                       finish
                                         ↓
                                        END
+
+**从 discover_assets 出去有三条路**，由 route_after_assets 现场决定：
+正常问数去 generate_sql；unknown 但确实在问业务口径/原因的
+（「客单价怎么算？」）去 answer_from_knowledge，只查知识库作答；
+其余（真不是问数问题、或目录里没有可用资产）直接 finish 给引导话术。
 
 **「SQL 校验通过」是进入 execute_query 的唯一入口**：整张图里只有
 validate_sql 的条件边指向它，而那条边只在 passed == True 时才走。
 换句话说，「先校验、再执行」不是靠节点自觉遵守的约定，而是**图的结构本身**——
 想执行，就必须先过校验那一关，绕不过去。
 
-**结果的加工是一条链，没有旁路**：execute_query → explain_result →
-suggest_visualization → finish。用户最终看到的不是「返回了 N 行」这种
-执行日志，而是「一段分析结论 + 一份前端可渲染的图表配置」。
+**结果的加工是一条链，没有旁路**：execute_query → search_knowledge_if_needed →
+explain_result → suggest_visualization → finish。用户最终看到的不是
+「返回了 N 行」这种执行日志，而是「一段分析结论 + 一份前端可渲染的图表配置」，
+需要解释的业务问题还会附带知识库来源。
 
-最后三个节点里有三个用到了模型（understand_question / generate_sql /
+最后几个节点里有三个用到了模型（understand_question / generate_sql /
 repair_sql），一个取真实数据（execute_query，走数据中台安全查询服务），
-一个纯本地（suggest_visualization 是规则引擎），一个纯本地且不注入也不能换
+两个纯本地（suggest_visualization 是规则引擎；search_knowledge_if_needed
+是规则判断 + 检索服务，不碰模型），一个纯本地且不注入也不能换
 （validate_sql）。
-**不是每个 Agent 节点都需要 LLM** —— 见 visualization.py 的说明。
+**不是每个 Agent 节点都需要 LLM** —— 见 visualization.py 与 knowledge.py 的说明。
 
-**execute_query 是全图唯一的异步节点**，因为它要 await 数据服务。
-LangGraph 只要图里有一个异步节点，就拒绝同步 invoke
-（TypeError: No synchronous function provided to "execute_query"），
+**图里有两个异步节点**：execute_query（await 数据服务）和
+search_knowledge_if_needed（await 检索服务）。LangGraph 只要图里有一个异步节点，
+就拒绝同步 invoke（TypeError: No synchronous function provided to "execute_query"），
 所以本图必须用 `await graph.ainvoke(...)` 驱动。其余节点保持同步不动——
-只把真正需要 I/O 的那个节点异步化，比把整张图都改成 async 改动面小得多。
+只把真正需要 I/O 的节点异步化，比把整张图都改成 async 改动面小得多。
 
 图里**唯一一条回边**是 repair_sql → validate_sql。它不会变成死循环，
 因为 route_after_validation 要求 `retry_count < MAX_SQL_RETRY` 才会放行，
@@ -86,14 +96,25 @@ from app.agent.data_query.constants import (
     NODE_FINISH,
     NODE_GENERATE_SQL,
     NODE_INTAKE,
+    NODE_KNOWLEDGE_ANSWER,
     NODE_REPAIR_SQL,
+    NODE_SEARCH_KNOWLEDGE,
     NODE_SUGGEST_VISUALIZATION,
     NODE_UNDERSTAND_QUESTION,
     NODE_VALIDATE_SQL,
 )
 from app.agent.data_query.intent import IntentClassification, classify_intent
+from app.agent.data_query.knowledge import (
+    KnowledgeAnswerer,
+    KnowledgeSearcher,
+    needs_knowledge,
+    no_knowledge_answerer,
+    no_knowledge_searcher,
+    search_knowledge_tool,
+)
 from app.agent.data_query.mock_query import execute_mock_query_async
 from app.agent.data_query.nodes import (
+    answer_from_knowledge,
     discover_assets,
     execute_query,
     explain_result,
@@ -101,6 +122,7 @@ from app.agent.data_query.nodes import (
     generate_sql,
     intake,
     repair_sql,
+    search_knowledge_if_needed,
     suggest_visualization,
     understand_question,
     validate_sql,
@@ -126,13 +148,21 @@ def route_after_assets(state: DataQueryState) -> str:
     好处是它可以脱离 Graph 单独测试——传一个 dict 进去，断言返回的字符串，
     比搭一整个图再观察走到了哪个节点快得多，也准得多。
 
-    四个判断条件，命中任意一条就直奔 finish：
+    五个判断条件，按优先级：
 
-    - 已有 error      上游失败了，没必要再花钱生成 SQL
-    - intent 是 unknown 问题根本不是问数问题，生成 SQL 没有意义
-    - 没有匹配资产     是问数问题，但目录里找不到可用的表和指标，
-                      模型拿不到任何「可用资产」清单，硬生成必然编造表名
-    - 其余情况         正常问数，交给 generate_sql
+    - 已有 error       上游失败了，没必要再花钱
+    - intent 是 unknown **但确实在问业务口径/原因** → 知识库作答
+    - intent 是 unknown 且不是那种问题              → finish 给引导话术
+    - 没有匹配资产      是问数问题，但目录里找不到可用的表和指标，
+                       模型拿不到任何「可用资产」清单，硬生成必然编造表名
+    - 其余情况          正常问数，交给 generate_sql
+
+    **unknown 为什么要拆成两种？** 这是实测发现的：真实的意图分类器把
+    「客单价怎么算？」「为什么 12 月销售额通常更高？」判成 unknown——
+    它们确实不是趋势、排行、拆分或复购。但这两个问题问的是业务口径和原因，
+    知识库答得了，也该由它答。早年一律收尾，等于把知识库最该处理的问题
+    挡在门外。判据用 knowledge.needs_knowledge，和后面那个知识库节点
+    同一个函数——判断标准只有一处，不会出现「这里说需要、那里说不需要」。
 
     注意最后一条是「默认放行」而不是「显式匹配某个 intent」：
     将来新增意图时，只要它没被显式排除，就会自动走生成流程，
@@ -140,8 +170,12 @@ def route_after_assets(state: DataQueryState) -> str:
     """
     if state.get("error"):
         return NODE_FINISH
+
     if state.get("intent") == "unknown":
+        if needs_knowledge(state.get("question") or "", "unknown"):
+            return NODE_KNOWLEDGE_ANSWER
         return NODE_FINISH
+
     if not state.get("matched_assets"):
         return NODE_FINISH
     return NODE_GENERATE_SQL
@@ -197,24 +231,42 @@ def build_graph(
     query_executor: QueryExecutor = execute_real_query,
     result_explainer: Callable[..., ResultExplanation] = explain_query_result,
     chart_suggester: Callable[..., ChartSuggestion] = suggest_chart,
+    knowledge_searcher: KnowledgeSearcher = search_knowledge_tool,
+    knowledge_answerer: KnowledgeAnswerer | None = None,
 ):
     """组装并编译 Graph。每次调用都返回独立的新实例，测试里可以随便建。
 
-    六个参数缺省都是真实实现；测试传入替身即可完全不碰网络与数据库。
+    八个参数缺省都是真实实现；测试传入替身即可完全不碰网络与数据库。
 
     query_executor 的缺省值是 execute_real_query——它会调用数据中台的
     execute_safe_query 读取真实 PostgreSQL。**生产图不会悄悄退回 mock**：
     想用模拟数据必须显式走 build_mock_data_query_graph()。
+
+    knowledge_searcher 的缺省值会真的去查 pgvector。注意它与 query_executor
+    在失败语义上**刻意不同**：query_executor 失败会写 error 终止流程，
+    而知识库检索失败只记 knowledge_error，不中断——知识库是锦上添花，
+    不该因为它挂了就让用户拿不到数据结论。见 nodes.search_knowledge_if_needed。
+
+    knowledge_answerer 处理另一条路：unknown 意图但确实在问业务口径/原因
+    （「客单价怎么算？」）。那条路不需要 SQL，直接用知识库作答。
+    它的缺省值是 None，表示「用真实的那个」——之所以写成 None 而不是直接写函数，
+    是为了避免在模块导入时就碰 app.services.rag_answer 的整条依赖链；
+    真正的取用推迟到编译图的那一刻。
 
     注意最后那个 chart_suggester：它注入的是个**纯函数**，不是模型调用。
     保留这个注入点的理由是测试——要构造「建议器抛异常」这种场景，
     只能靠替换实现。
 
     ⚠️ 本图必须用 ainvoke 驱动（或者 astream），不能用 invoke。
-    execute_query 是异步节点（它要 await 数据服务），而 LangGraph 只要
-    图里有一个异步节点，就拒绝同步 invoke：
+    图里有两个异步节点（execute_query 和 search_knowledge_if_needed），
+    而 LangGraph 只要图里有一个异步节点，就拒绝同步 invoke：
         TypeError: No synchronous function provided to "execute_query"
     """
+    if knowledge_answerer is None:
+        from app.services.rag_answer import answer_from_knowledge as real_answerer
+
+        knowledge_answerer = real_answerer
+
     builder = StateGraph(DataQueryState)
 
     # 注册节点：名字（给图看，出现在报错和可视化里）+ 函数（真正执行的逻辑）
@@ -227,6 +279,10 @@ def build_graph(
     )
     builder.add_node(NODE_DISCOVER_ASSETS, discover_assets)
     builder.add_node(
+        NODE_KNOWLEDGE_ANSWER,
+        partial(answer_from_knowledge, knowledge_answerer=knowledge_answerer),
+    )
+    builder.add_node(
         NODE_GENERATE_SQL,
         partial(generate_sql, sql_generator=sql_generator),
     )
@@ -238,6 +294,10 @@ def build_graph(
     builder.add_node(
         NODE_EXECUTE_QUERY,
         partial(execute_query, query_executor=query_executor),
+    )
+    builder.add_node(
+        NODE_SEARCH_KNOWLEDGE,
+        partial(search_knowledge_if_needed, knowledge_searcher=knowledge_searcher),
     )
     builder.add_node(
         NODE_EXPLAIN_RESULT,
@@ -254,8 +314,14 @@ def build_graph(
     builder.add_edge(NODE_INTAKE, NODE_UNDERSTAND_QUESTION)
     builder.add_edge(NODE_UNDERSTAND_QUESTION, NODE_DISCOVER_ASSETS)
     builder.add_edge(NODE_GENERATE_SQL, NODE_VALIDATE_SQL)
-    # 执行完必然去解读，解读完必然给图表建议，然后收尾。
-    # 这三步都不分叉，所以全用普通边。
+    # 执行完必然去查知识库（节点内部按规则决定查不查），查完必然去解读，
+    # 解读完必然给图表建议。这四步都不分叉，所以全用普通边。
+    #
+    # 注意 execute_query **不再直接连 explain_result**：中间插了知识库检索。
+    # 为什么用普通边而不是条件边？因为「要不要查」是节点内部的规则判断，
+    # 不是图结构上的分叉——不需要查时节点原样返回、不写任何字段，
+    # 图照常往下走。用条件边会多出一份「哪些情况走哪条边」的知识，
+    # 而那部分逻辑本来就在 knowledge.py 里，放在两处迟早对不上。
     #
     # 注意 execute_query **不再直接连 finish**：结果必须先经过解释节点，
     # 才能变成给用户看的结论。少接这一跳，用户看到的就还是「返回了 N 行」
@@ -263,10 +329,14 @@ def build_graph(
     #
     # 同理，explain_result 也不再直接连 finish：结论之外还要带上
     # 前端渲染所需的图表配置，两样齐了才算一次完整的问答。
-    builder.add_edge(NODE_EXECUTE_QUERY, NODE_EXPLAIN_RESULT)
+    builder.add_edge(NODE_EXECUTE_QUERY, NODE_SEARCH_KNOWLEDGE)
+    builder.add_edge(NODE_SEARCH_KNOWLEDGE, NODE_EXPLAIN_RESULT)
     builder.add_edge(NODE_EXPLAIN_RESULT, NODE_SUGGEST_VISUALIZATION)
     builder.add_edge(NODE_SUGGEST_VISUALIZATION, NODE_FINISH)
     builder.add_edge(NODE_FINISH, END)
+    # 「只查知识库作答」是一条**独立终点路径**：不生成 SQL、不查数据、
+    # 也不给图表建议（没有数据可画）。答完直接收尾。
+    builder.add_edge(NODE_KNOWLEDGE_ANSWER, NODE_FINISH)
 
     # 唯一的一条回边。注意它是普通的 add_edge，不带走什么条件：
     # 「该不该回来」由 repair_sql 上游的 route_after_validation 决定，
@@ -283,6 +353,7 @@ def build_graph(
         route_after_assets,
         {
             NODE_GENERATE_SQL: NODE_GENERATE_SQL,
+            NODE_KNOWLEDGE_ANSWER: NODE_KNOWLEDGE_ANSWER,
             NODE_FINISH: NODE_FINISH,
         },
     )
@@ -338,6 +409,12 @@ def build_mock_data_query_graph(**overrides):
     单独做成一个工厂而不是给 build_graph 加开关，是为了让「用模拟数据」
     这件事在调用点显而易见：读到 build_mock_data_query_graph() 就知道
     这次不会碰数据库。反过来，build_graph() 永远是真实的。
+
+    knowledge_searcher 也一并换成不查库的替身：真实的那个要连 pgvector，
+    留着它这个工厂「不需要数据库」的承诺就破了——一个「为什么……」的问题
+    会走到检索那一步然后失败。knowledge_answerer 同理。
     """
     overrides.setdefault("query_executor", execute_mock_query_async)
+    overrides.setdefault("knowledge_searcher", no_knowledge_searcher)
+    overrides.setdefault("knowledge_answerer", no_knowledge_answerer)
     return build_graph(**overrides)

@@ -39,8 +39,18 @@ from collections.abc import Callable
 
 from pydantic import BaseModel
 
-from app.agent.data_query.constants import MAX_SQL_RETRY
+from app.agent.data_query.constants import (
+    MAX_SQL_RETRY,
+    NODE_KNOWLEDGE_ANSWER,
+    NODE_SEARCH_KNOWLEDGE,
+)
 from app.agent.data_query.intent import IntentClassification, classify_intent
+from app.agent.data_query.knowledge import (
+    KnowledgeAnswerer,
+    KnowledgeSearcher,
+    knowledge_trigger_reason,
+    search_knowledge_tool,
+)
 from app.agent.data_query.query_execution import (
     CONTRACT_MESSAGE,
     QueryExecutor,
@@ -60,9 +70,15 @@ from app.agent.data_query.sql_generation import (
     repair_sql_draft,
 )
 from app.agent.data_query.sql_validation import validate_sql_draft
-from app.agent.data_query.state import ChartSuggestion, DataQueryState
+from app.agent.data_query.state import (
+    ChartSuggestion,
+    DataQueryState,
+    KnowledgeSnippet,
+    KnowledgeSource,
+)
 from app.agent.data_query.tools import search_datasets, search_metrics
 from app.agent.data_query.visualization import suggest_chart
+from app.services.rag_answer import answer_from_knowledge as produce_knowledge_answer
 
 # 对外的统一失败文案。刻意写得笼统：用户看到的是「过一会儿再试」，
 # 真正的原因留给日志和 events 里的异常类别。
@@ -71,6 +87,14 @@ SQL_GENERATION_ERROR_MESSAGE = "SQL 草稿生成失败，请稍后重试。"
 SQL_REPAIR_ERROR_MESSAGE = "SQL 草稿修复失败，请稍后重试。"
 EXPLANATION_ERROR_MESSAGE = "分析结论生成失败，请稍后重试。"
 CHART_SUGGESTION_ERROR_MESSAGE = "图表建议生成失败，请稍后重试。"
+
+# 知识库检索失败的说明。注意它**不是给用户看的报错**，只是记进 events，
+# 因为知识库挂了不影响已经拿到的查询结果——那份结果照常解释、照常返回。
+KNOWLEDGE_SEARCH_ERROR_MESSAGE = "知识库检索未完成，分析结论仅基于查询结果。"
+
+# 「只查知识库作答」这条路上失败了：这条路没有数据结论可退，
+# 所以只能如实报错，而不是给一个会把用户带偏的引导话术。
+KNOWLEDGE_ANSWER_ERROR_MESSAGE = "知识库问答未能完成，请稍后重试。"
 
 # 前置条件不满足时的文案。这里只说「没通过校验」，不说是哪条校验没过——
 # 校验问题原文属于内部细节，不该顺着 error 漏到接口响应里。
@@ -443,6 +467,149 @@ async def execute_query(
     }
 
 
+async def answer_from_knowledge(
+    state: DataQueryState,
+    knowledge_answerer: KnowledgeAnswerer = produce_knowledge_answer,
+) -> dict:
+    """unknown 意图 + 需要知识库时，只查知识库作答（不查数据）。
+
+    ## 为什么非要有这个节点
+
+    真实的意图分类器把「客单价怎么算？」「为什么 12 月销售额通常更高？」这类
+    **纯口径 / 纯归因问题**判成 `unknown`——它们确实不是趋势、排行、拆分或复购。
+    而 route_after_assets 对 unknown 的处理是直接收尾，给一句「我只能处理数据分析问题」。
+
+    问题是：这些恰恰是知识库最该回答的问题。不加这条路，本节点后面那条
+    「检索知识库」的链路对它们永远不可达——功能写了，却用不上。
+    实测确认过：`客单价怎么算？` 和 `为什么 12 月销售额通常更高？` 都被判 unknown。
+
+    ## 它和 search_knowledge_if_needed 的分工
+
+    - 这条（本节点）：**没有数据可查**，知识库是唯一的答案来源，直接出成稿回答。
+    - 那条：**已经查到了数据**，知识库只提供解释，结论仍以数据为准。
+
+    两条路都查到知识库，但性质完全不同，所以没有合并成一个节点。
+
+    ## 为什么直接复用 app.services.rag_answer
+
+    那一整套（检索 → 组提示词 → 调模型 → 三种状态）已经写好并验证过，
+    在 /api/v1/rag/answer 上跑了很久。这里再实现一遍只会多出一份会走样的副本。
+    本节点只做适配：把 RagAnswer 的字段映射进 Agent 的 State。
+
+    ⚠️ 这条路**没有数据结论可退**，所以失败时如实写 error。不能退回那句
+    「我只能处理数据分析问题」的引导话术——那会把用户带偏，
+    让他以为问的问题不对，其实是服务挂了。
+    """
+    if state.get("error"):
+        return {}
+
+    question = (state.get("question") or "").strip()
+
+    try:
+        answer = await knowledge_answerer(question)
+    except Exception as exc:
+        # 只记异常类名：异常原文可能带连接串或密钥，而 State 最终会进 API 响应
+        return {
+            "error": KNOWLEDGE_ANSWER_ERROR_MESSAGE,
+            "events": [
+                f"{NODE_KNOWLEDGE_ANSWER}：知识库问答失败（{type(exc).__name__}）"
+            ],
+        }
+
+    # RagAnswer.sources 的字段与本项目 KnowledgeSource 一一对应，
+    # 直接取用即可（它本来就只含能对外看的字段，没有正文全文与向量）。
+    sources: list[KnowledgeSource] = [
+        KnowledgeSource(
+            source_file=source.source_file,
+            document_title=source.document_title,
+            section_title=source.section_title,
+            chunk_index=source.chunk_index,
+            preview=source.preview,
+            similarity=source.similarity,
+        )
+        for source in answer.sources
+    ]
+
+    return {
+        "needs_knowledge": True,
+        # status 是 ok / insufficient / no_knowledge 三种之一。
+        # 后两种的 answer 是知识库服务给的固定文案（「没有足够信息回答」），
+        # 照原样返回即可——那是诚实的结果，不是错误。
+        "answer": answer.answer,
+        "knowledge_sources": sources,
+        "events": [
+            f"{NODE_KNOWLEDGE_ANSWER}：已基于知识库作答（状态 {answer.status}，"
+            f"来源 {len(sources)} 条）"
+        ],
+    }
+
+
+async def search_knowledge_if_needed(
+    state: DataQueryState,
+    knowledge_searcher: KnowledgeSearcher = search_knowledge_tool,
+) -> dict:
+    """知识库检索节点：按规则决定要不要查，把结果整理成内部 / 对外两份。
+
+    **它绝不写 error。** 知识库是锦上添花，挂了只记 knowledge_error，
+    已经拿到的查询结果照常往下走。这一点至关重要：如果把检索失败写成 error，
+    下游每个节点的开头都有 `if state.get("error"): return {}`，
+    用户会因为一次无关紧要的检索超时，连本来已经算好的数据结论都拿不到。
+
+    三条出口：
+
+    1. 上游已失败，或规则判定不需要知识库 → 什么都不写（不改 State）
+    2. 检索成功                          → 写 knowledge_results 与 knowledge_sources
+    3. 检索抛异常                        → 只写 knowledge_error
+
+    needs_knowledge 在这里算并写进 State，而不是去改 understand_question：
+    规则需要 intent，而 intent 那时已经有了。放在这里，判断和使用挨在一起，
+    改规则时不用在三个节点之间来回找。
+
+    ⚠️ 本节点是异步的（要 await 检索服务）。图里因此有两个异步节点，
+    但这不影响任何事——图早就必须用 ainvoke 驱动了（见 graph.py 的说明）。
+    """
+    if state.get("error"):
+        return {}
+
+    question = (state.get("question") or "").strip()
+    reason = knowledge_trigger_reason(question, state.get("intent"))
+
+    if reason is None:
+        # 不需要知识库：显式写 needs_knowledge=False 而不是省略。
+        # 省略的话 State 里没有这个键，事后从留存的状态里根本分不清
+        # 「判断过、结论是不需要」和「压根没走到这一步」。
+        return {
+            "needs_knowledge": False,
+            "events": [f"{NODE_SEARCH_KNOWLEDGE}：本次问题不需要知识库"],
+        }
+
+    try:
+        snippets, sources = await knowledge_searcher(question)
+    except Exception as exc:
+        # 只记异常类名。异常原文里可能带着连接串或密钥，
+        # 而 State 最终会进 API 响应——这类事故在 explain_result 里也防过一次。
+        return {
+            "needs_knowledge": True,
+            "knowledge_error": KNOWLEDGE_SEARCH_ERROR_MESSAGE,
+            "knowledge_results": [],
+            "knowledge_sources": [],
+            "events": [
+                f"{NODE_SEARCH_KNOWLEDGE}：知识库检索失败（{type(exc).__name__}），"
+                "已跳过，不影响查询结论",
+            ],
+        }
+
+    return {
+        "needs_knowledge": True,
+        "knowledge_error": None,
+        "knowledge_results": snippets,
+        "knowledge_sources": sources,
+        "events": [
+            f"{NODE_SEARCH_KNOWLEDGE}：{reason}，检索到 {len(snippets)} 条知识资料"
+        ],
+    }
+
+
 def explain_result(
     state: DataQueryState,
     result_explainer: Callable[..., ResultExplanation] = explain_query_result,
@@ -458,6 +625,12 @@ def explain_result(
     3. 有数据                 → 调模型，把结论写进 answer。
 
     注意本节点**不接收 sql_draft**，也不往 Prompt 里放 SQL。见下方注释。
+
+    接入知识库之后本节点多了一层输入：knowledge_results。有资料时模型可以
+    解释口径与「可能的原因」，但提示词里写死了三条约束——数字只能来自
+    query_result、资料里的可能原因不得升级成确定因果、两者冲突时以数据为准。
+    ⚠️ 注意第 2 条出口（row_count == 0）**不调模型**，所以那条路径上
+    知识库资料不会被用到：没有数据可解读时，光有业务解释也构不成回答。
     """
     if state.get("error"):
         return {}
@@ -490,9 +663,12 @@ def explain_result(
 
     question = (state.get("question") or "").strip()
     intent = state.get("intent") or "unknown"
+    # 知识库资料（可能为空）。传的是**内部**那份带完整正文的片段，
+    # 不是对外的 preview——模型要够料才解释得清「为什么」。
+    knowledge_snippets = state.get("knowledge_results") or []
 
     try:
-        # 只传 question / intent / query_result。
+        # 只传 question / intent / query_result / knowledge_snippets。
         #
         # **不传 sql_draft**，原因是多方面的：
         # 1. 没必要。解读结果只需要结果本身，SQL 是过程产物。
@@ -500,8 +676,16 @@ def explain_result(
         #    开了个「可以谈论数据库结构」的口子，而输出规则里明令禁止
         #    提及表名字段。给了它，就多一分漏出去的可能。
         # 3. 边界更干净。节点的输入越少，它能造成的破坏面就越小。
+        #
+        # 知识库资料则是**要传**的：它正是本节点新获得的能力来源，
+        # 而且它只带文档正文，不含表名字段名——对「不许谈论数据库结构」
+        # 这条规则没有新增风险。数字仍然只来自 query_result，
+        # 提示词里对此有明确约束。
         raw = result_explainer(
-            question=question, intent=intent, query_result=query_result
+            question=question,
+            intent=intent,
+            query_result=query_result,
+            knowledge_snippets=knowledge_snippets,
         )
         # 不信任返回值，重新校验一遍（和前面几个节点同一套路）。
         payload = raw.model_dump() if isinstance(raw, BaseModel) else raw
@@ -648,7 +832,8 @@ def finish(state: DataQueryState) -> dict:
 
     分支顺序有讲究，从上往下是「越早发现、越具体」优先：
       1. error            —— 流程真出错了，保留原始诊断，不改写
-      2. unknown 意图      —— 问题本身不是问数问题
+      2. unknown 意图      —— 2a. 已经有 answer（answer_from_knowledge 写的）→ **原样保留**
+                             2b. 没有答案 → 问题本身不是问数问题，给引导话术
       3. 没有匹配资产      —— 是问数问题，但目录里没有对应的资产
       4. 有查询结果        —— 4a. 已经有 answer（explain_result 写的）→ **原样保留**
                              4b. 有结果但没结论 → 兜底文案，仅直接单测会命中
@@ -658,9 +843,13 @@ def finish(state: DataQueryState) -> dict:
                              5c. 没过但还有额度 → 正常接线也不会到这，兜底
       6. 兜底             —— 还没接上生成/校验的老路径
 
-    第 4a 条是**本次新增、也是最要紧的一条**：finish 不再自己编答案，
-    而是把 explain_result 的成果原样交出去。这条分支只补一条事件、
-    一个字段都不改——「什么都不做」在这里就是正确的行为。
+    第 2a 和 4a 是**同一条原则的两次应用**：finish 不自己编答案，
+    上游节点（知识库 / 解释模型）已经产出的结论原样交出去，
+    这些分支只补一条事件、一个字段都不改——「什么都不做」在这里就是正确行为。
+
+    第 2a 那条是接入知识库时补上的，而且**不加就是线上事故**：
+    unknown 意图 + 知识库作答是正常路径，finish 不判「有没有现成答案」
+    就会把它覆盖成「我只能处理数据分析问题」。见该分支的注释。
 
     第 4b 和第 5a 组一样，都是为了让 finish 的对外契约完整：
     正常接线走不到，但直接单测 finish 时它得能正确作答。
@@ -678,6 +867,20 @@ def finish(state: DataQueryState) -> dict:
         return {"events": [f"finish：流程因错误提前结束（{error}）"]}
 
     if state.get("intent") == "unknown":
+        # ⚠️ 这里必须先看有没有现成的答案，再决定要不要写引导话术。
+        #
+        # 「unknown」有两种处境，收尾方式完全相反：
+        # - 真不是问数问题（「帮我写一首诗」）→ 给引导话术；
+        # - 是业务口径/原因问题（「客单价怎么算？」）→ answer_from_knowledge
+        #   已经用知识库答好了，**必须原样保留**。
+        #
+        # 不判这一下的话，用户拿到的会是「我目前只能处理数据分析问题」——
+        # 而他问的「客单价怎么算？」知识库明明答得出来。这是最坏的一类 bug：
+        # 流程跑通、answer 有值、值是错的，而且看起来像「模型能力不行」。
+        existing_answer = state.get("answer")
+        if existing_answer:
+            return {"events": ["finish：已由知识库作答，流程结束"]}
+
         return {
             "answer": UNKNOWN_INTENT_ANSWER,
             "events": ["finish：问题不属于数据分析范畴，返回引导回答"],
