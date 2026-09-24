@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
+from contextvars import ContextVar
 from typing import Any
 
 from langchain_core.tools import tool
@@ -8,11 +10,25 @@ from app.agent.data_query.graph import get_data_query_graph
 from app.agent.business_analysis.schemas import ToolResult
 from app.services.knowledge_retrieval import retrieve_knowledge
 
+_report_saver: ContextVar[Any | None] = ContextVar("business_analysis_report_saver", default=None)
+
 
 async def _save_analysis_report(*, run_id: str, report: dict[str, Any]) -> str:
     """Injected by the runner once a transaction is available."""
 
-    raise RuntimeError("报告保存服务尚未绑定。")
+    saver = _report_saver.get()
+    if saver is None:
+        raise RuntimeError("报告保存服务尚未绑定。")
+    return await saver(run_id=run_id, report=report)
+
+
+@asynccontextmanager
+async def bind_report_saver(saver: Any):
+    token = _report_saver.set(saver)
+    try:
+        yield
+    finally:
+        _report_saver.reset(token)
 
 
 def _public_query_result(value: Any) -> dict[str, Any] | None:
