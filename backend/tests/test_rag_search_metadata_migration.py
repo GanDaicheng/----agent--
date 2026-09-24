@@ -156,7 +156,9 @@ def test_migration_is_the_single_alembic_head():
     config = Config(str(ALEMBIC_INI))
     heads = ScriptDirectory.from_config(config).get_heads()
 
-    assert list(heads) == [NEW_REVISION]
+    # The business-analysis persistence migration is now the project head and
+    # depends on this RAG metadata migration.
+    assert list(heads) == ["20260924ba02"]
 
 
 # --------------------------------------------------------------------------

@@ -36,6 +36,7 @@ export const PAGE_HREFS = {
   dataWarehouse: "/data/warehouse",
   knowledgeQa: "/applications/knowledge-qa",
   dataQuery: "/applications/data-query",
+  businessAnalysis: "/applications/business-analysis",
   architecture: "/architecture",
 } as const;
 
@@ -261,6 +262,35 @@ const APPLICATIONS: PlatformSection = {
         desc: "基于已入库文档回答业务口径和规则问题。",
       },
     },
+    {
+      slug: "business-analysis",
+      name: "AI 经营分析",
+      summary: "由主管 Agent 多轮调用问数和知识库工具，生成带证据的经营分析报告。",
+      status: "building",
+      notice:
+        "当前使用零售样例数据和匿名浏览器会话；企业登录、租户隔离与生产数据权限尚未接入。",
+      workflow: [
+        "理解经营目标",
+        "动态调用数据分析工具",
+        "根据异常继续下钻",
+        "检索业务规则与指标口径",
+        "生成结构化经营报告",
+      ],
+      current: [
+        "基于 Deep Agents 的主管 Agent",
+        "复用现有智能问数 LangGraph 和 RAG 工具",
+        "通过 SSE 实时展示工具调用与报告生成过程",
+        "支持线程状态恢复和匿名用户偏好记忆",
+      ],
+      dependencies: [
+        "智能问数 + 知识库与 RAG → Deep Agents 主管 → AI 经营分析应用",
+      ],
+      livePage: {
+        href: PAGE_HREFS.businessAnalysis,
+        label: "AI 经营分析",
+        desc: "让主管 Agent 多步分析销售、会员、品类和业务规则。",
+      },
+    },
   ],
 };
 
@@ -301,6 +331,7 @@ export const OVERVIEW_ENTRY_KEYS = [
   { sectionId: "data", slug: "sources" },
   { sectionId: "applications", slug: "knowledge-qa" },
   { sectionId: "applications", slug: "data-query" },
+  { sectionId: "applications", slug: "business-analysis" },
 ] as const;
 
 /** 动态路由 app/<section>/[module] 需要的分段参数，供 generateStaticParams 使用。 */

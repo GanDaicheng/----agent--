@@ -172,7 +172,7 @@ backend 容器用的连接串是 `DATABASE_URL_DOCKER`，它的主机名是 Comp
 > docker compose up -d postgres    # 1. 先在项目根目录起数据库
 > docker compose ps                # 2. 等到 STATUS 显示 healthy
 > cd backend                       # 3. 再起后端
-> uvicorn app.main:app --reload
+> uvicorn app.main:app --reload --loop app.core.event_loop:selector_loop_factory
 > ```
 
 ### 1. 准备虚拟环境
@@ -198,7 +198,7 @@ Copy-Item .env.example .env
 
 ```powershell
 cd backend
-uvicorn app.main:app --reload
+uvicorn app.main:app --reload --loop app.core.event_loop:selector_loop_factory
 ```
 
 接口地址：
@@ -810,13 +810,63 @@ python backend/scripts/smoke_reranker.py                           # 精排接�
 
 ## 前端交互页面
 
-三个页面会真实调用后端：
+四个页面会真实调用后端：
 
 ```text
 http://localhost:3000/data/sources                   数据采集：上传知识文档、查看已入库列表
 http://localhost:3000/applications/knowledge-qa       知识问答：问业务口径，检索知识文档
 http://localhost:3000/applications/data-query         智能问数：自然语言提问，查业务数据
+http://localhost:3000/applications/business-analysis  经营分析：Deep Agents 多轮拆解、工具调用与报告生成
 ```
+
+### Deep Agents 经营分析助手
+
+这是本项目新增的上层业务 Agent，不是单独下载的桌面软件，也不是复制官方 `dcode` 终端。
+它使用 `deepagents==0.7.18` 作为 Agent Harness，运行在现有 FastAPI 服务中；前端是
+Next.js 页面，通过 SSE 实时展示 Agent 的状态、工具调用和报告增量。
+
+```text
+用户目标
+  → Deep Agent Loop（拆解目标、选择工具、根据结果继续循环）
+      ├─ analyze_business_data → 现有 LangGraph 问数图 → SQL AST 校验 → 只读查询
+      ├─ search_business_knowledge → pgvector / 混合检索 → 促销规则与业务文档
+      ├─ get_metric_definition → 指标口径检索
+      └─ save_analysis_report → 结构化报告落库
+  → SSE 事件 → 经营分析工作台
+```
+
+它解决的是“需要多步分析”的问题：例如先比较区域趋势，再下钻品类贡献，最后结合促销
+规则输出证据、原因、建议和风险。Deep Agent 只负责规划和循环，数据查询仍经过原有
+安全 LangGraph，不允许新增数据库旁路。
+
+关键工程能力：
+
+- `LangGraph Checkpoint + PostgreSQL`：同一 `thread_id` 可以继续追问，刷新后恢复运行上下文。
+- `PostgreSQL Store + business_analysis_memories`：保存白名单用户偏好（币种、区域、图表、报告风格）。
+- 上下文压缩：大工具结果只保留摘要、行数和 Artifact ID，避免无界增长上下文窗口。
+- 运行治理：最大 Agent 步数、工具调用次数、单次超时、同线程并发保护。
+- 安全事件：对外 SSE 只返回固定事件和摘要，不返回 SQL、密钥、Prompt 或内部异常。
+
+当前作品集版本的并发保护是单进程内存锁，匿名 UUID 也不是生产身份认证；如果部署多副本，
+应把线程锁升级为 PostgreSQL advisory lock/分布式锁，并接入登录身份、租户隔离和权限校验。
+
+本地运行经营分析页面前，先执行数据库迁移并启动后端、前端：
+
+```powershell
+cd backend
+python -m alembic upgrade head
+uvicorn app.main:app --reload --loop app.core.event_loop:selector_loop_factory
+
+# 另一个终端
+cd frontend
+npm run dev
+```
+
+Windows 本地启动命令中保留 `selector_loop_factory`：LangGraph PostgreSQL
+Checkpoint/Store 使用的 `psycopg` 异步连接不兼容 Windows 默认 Proactor 事件循环。
+
+访问 `http://localhost:3000/applications/business-analysis`。作品集阶段的用户标识由浏览器
+生成匿名 UUID，只用于演示会话记忆，不能当作生产身份认证。
 
 三者共用同一套请求约定：首次打开不发请求、请求可取消、取消与失败分开展示、
 响应做结构校验、模型输出按纯文本渲染。下面以智能问数为例说明。

@@ -1,0 +1,43 @@
+.workspace { display: grid; grid-template-columns: 190px minmax(0, 1fr) 280px; gap: 16px; margin-top: 24px; align-items: start; }
+.threadColumn, .sideColumn, .promptCard, .reportPanel { border: 1px solid var(--border-subtle, #d9dee7); background: var(--surface, #fff); border-radius: 14px; }
+.threadColumn { padding: 14px; min-height: 560px; }
+.threadHeader, .sideHeader, .reportHeader { display: flex; justify-content: space-between; align-items: center; font-weight: 700; }
+.threadHeader button, .exampleRow button { border: 0; background: transparent; color: #4a5b78; cursor: pointer; }
+.threadList { list-style: none; padding: 12px 0 0; margin: 0; display: grid; gap: 6px; }
+.thread, .activeThread { width: 100%; text-align: left; border: 0; border-radius: 9px; padding: 10px; cursor: pointer; display: grid; gap: 5px; }
+.thread { background: transparent; color: inherit; }
+.activeThread { background: #edf3ff; color: #1c4a9c; }
+.thread small { color: #7b879a; }
+.mainColumn { display: grid; gap: 14px; min-width: 0; }
+.promptCard { padding: 18px; display: grid; gap: 10px; }
+.promptCard label { font-weight: 700; }
+.promptCard textarea { resize: vertical; border: 1px solid #cfd6e2; border-radius: 9px; padding: 12px; font: inherit; min-height: 76px; }
+.promptActions { display: flex; gap: 8px; }
+.promptActions button { border: 0; border-radius: 8px; padding: 9px 15px; background: #1d4ed8; color: white; cursor: pointer; }
+.promptActions button:disabled { opacity: .5; cursor: not-allowed; }
+.secondaryButton { background: #eef2f7 !important; color: #334155 !important; }
+.exampleRow { display: flex; flex-wrap: wrap; gap: 7px; }
+.exampleRow button { padding: 5px 8px; border-radius: 999px; background: #f3f6fa; font-size: 12px; }
+.preferenceRow { display: flex; align-items: center; gap: 8px; color: #475569; font-size: 13px; }
+.preferenceRow select { border: 1px solid #cfd6e2; border-radius: 7px; padding: 5px 8px; background: #fff; font: inherit; }
+.messageList { display: grid; gap: 10px; }
+.userMessage, .assistantMessage { padding: 12px 14px; border-radius: 12px; }
+.userMessage { background: #edf3ff; margin-left: 14%; }
+.assistantMessage { background: #f5f7fa; margin-right: 14%; }
+.messageRole { font-size: 11px; color: #64748b; font-weight: 700; }
+.userMessage p, .assistantMessage p { margin: 5px 0 0; white-space: pre-wrap; }
+.sideColumn { padding: 16px; min-height: 560px; }
+.eventCount, .reportBadge { font-size: 11px; color: #64748b; font-weight: 500; }
+.eventList { list-style: none; margin: 18px 0; padding: 0; display: grid; gap: 14px; }
+.eventList li { display: grid; grid-template-columns: 12px 1fr; gap: 8px; align-items: start; }
+.eventList strong { display: block; font-size: 13px; }
+.eventList small { display: block; margin-top: 4px; color: #64748b; line-height: 1.4; }
+.eventDot { display: block; width: 8px; height: 8px; margin-top: 4px; border-radius: 50%; background: #94a3b8; }
+.eventDot[data-type="tool_started"] { background: #f59e0b; }
+.eventDot[data-type="tool_completed"], .eventDot[data-type="run_completed"] { background: #16a34a; }
+.eventDot[data-type="error"] { background: #dc2626; }
+.reportPanel { padding: 18px; }
+.reportText { white-space: pre-wrap; overflow-x: auto; margin: 14px 0 0; font: inherit; line-height: 1.65; color: #263246; }
+.sideNote, .muted { color: #718096; font-size: 12px; line-height: 1.6; }
+@media (max-width: 1100px) { .workspace { grid-template-columns: 170px minmax(0, 1fr); } .sideColumn { grid-column: 1 / -1; min-height: auto; } }
+@media (max-width: 720px) { .workspace { grid-template-columns: 1fr; } .threadColumn { min-height: auto; } .userMessage, .assistantMessage { margin: 0; } }

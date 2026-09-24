@@ -1,0 +1,36 @@
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 9px;
+}
+
+.actions button {
+  min-height: 38px;
+  padding: 8px 13px;
+  color: #17325e;
+  background: #fff;
+  border: 1px solid #b9c8df;
+  border-radius: 8px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.actions button:first-child {
+  color: #fff;
+  background: #1d4ed8;
+  border-color: #1d4ed8;
+}
+
+.actions button:hover:not(:disabled) { transform: translateY(-1px); }
+.actions button:focus-visible { outline: 3px solid #f59e0b; outline-offset: 3px; }
+.actions button:disabled { cursor: wait; opacity: 0.62; }
+
+.error {
+  flex-basis: 100%;
+  margin: 2px 0 0;
+  color: #b42318;
+  font-size: 12px;
+  line-height: 1.5;
+}

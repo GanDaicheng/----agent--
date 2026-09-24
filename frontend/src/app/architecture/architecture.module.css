@@ -1,116 +1,174 @@
-/*
- * 技术栈与架构页面的样式。
- *
- * 这一页是讲解性质的长页面，所以节奏和功能页不同：分节之间留白更大，
- * 正文用可读行宽，架构图用深色面板作为整页的视觉重点。
- * 站点整体仍是浅色——只有架构图那一块是深的。
- */
-
 .page {
   display: flex;
   flex-direction: column;
 }
 
+.intro {
+  display: grid;
+  grid-template-columns: minmax(0, 1.3fr) minmax(330px, 0.7fr);
+  gap: 32px;
+  margin-top: 28px;
+  padding: 24px 26px;
+  background: linear-gradient(125deg, #f7faff 0%, #eef4ff 100%);
+  border: 1px solid #cddaf0;
+  border-radius: 14px;
+}
+
+.intro h2,
+.blockHead h2,
+.boundary h2 {
+  margin: 5px 0 0;
+  color: var(--text);
+  font-size: clamp(20px, 2.1vw, 28px);
+  letter-spacing: -0.03em;
+}
+
+.intro p:not(.eyebrow),
+.blockHead > p,
+.boundary > div > p:not(.eyebrow) {
+  max-width: 70ch;
+  margin: 10px 0 0;
+  color: var(--text-muted);
+  font-size: 14px;
+  line-height: 1.7;
+}
+
+.eyebrow {
+  margin: 0;
+  color: #2563eb;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 750;
+  letter-spacing: 0.14em;
+}
+
+.introSide {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 22px;
+}
+
+.metrics {
+  display: flex;
+  gap: 26px;
+  margin: 0;
+}
+
+.metrics div { text-align: right; }
+.metrics dt { color: #173f82; font-size: 28px; font-weight: 760; line-height: 1; }
+.metrics dd { margin: 5px 0 0; color: var(--text-muted); font-size: 11px; }
+
 .block {
-  margin-top: var(--space-7);
+  margin-top: 44px;
 }
 
 .blockHead {
   display: flex;
-  flex-wrap: wrap;
   align-items: flex-end;
   justify-content: space-between;
-  gap: var(--space-2) var(--space-5);
+  gap: 24px;
 }
 
-.blockTitle {
-  margin: 0;
-  font-size: var(--text-lg);
-  font-weight: var(--weight-semibold);
-}
+.blockHead > p { max-width: 45ch; text-align: right; }
 
-.blockNote {
-  margin: var(--space-2) 0 0;
-  max-width: 74ch;
-  font-size: var(--text-sm);
-  line-height: var(--leading-relaxed);
-  color: var(--text-muted);
-}
-
-/* 图与文字之间统一用这个间隔，免得每处各写一个 margin */
-.diagramWrap {
-  margin-top: var(--space-5);
-}
-
-/* ---------------------------- 技术栈 ---------------------------- */
-
-.stackGrid {
+.techGroups {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  gap: var(--space-4);
-  margin: var(--space-5) 0 0;
-  padding: 0;
-  list-style: none;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  margin-top: 20px;
 }
 
-.stackCard {
-  padding: var(--space-4);
-  background: var(--surface);
+.techGroup {
+  overflow: hidden;
+  background: #fff;
   border: 1px solid var(--border);
-  border-radius: var(--radius);
+  border-radius: 13px;
   box-shadow: var(--shadow);
 }
 
-.stackGroup {
-  margin: 0 0 var(--space-3);
-  font-size: var(--text-base);
-  font-weight: var(--weight-semibold);
-  color: var(--text);
+.techGroup > header {
+  display: grid;
+  grid-template-columns: 42px 1fr;
+  gap: 12px;
+  padding: 16px 18px;
+  background: #f7f9fc;
+  border-bottom: 1px solid var(--border);
 }
 
-.stackItems {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-2);
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.stackItem {
-  padding: 2px var(--space-2);
-  background: var(--surface-muted);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-pill);
+.techGroup > header > span {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  color: #1d4ed8;
+  background: #e7efff;
+  border-radius: 50%;
   font-family: var(--font-mono);
-  font-size: var(--text-xs);
-  color: var(--text);
-  /* 长技术名（text-embedding-v4）不要撑破卡片 */
-  overflow-wrap: anywhere;
+  font-size: 11px;
+  font-weight: 700;
 }
 
-/* ---------------------------- 架构说明 ---------------------------- */
+.techGroup h3 { margin: 0; color: var(--text); font-size: 15px; }
+.techGroup header p { margin: 4px 0 0; color: var(--text-muted); font-size: 12px; line-height: 1.5; }
+.techGroup ul { margin: 0; padding: 0; list-style: none; }
 
-.flowNote {
-  margin: var(--space-4) 0 0;
-  max-width: 74ch;
-  padding: var(--space-3) var(--space-4);
-  background: var(--surface-muted);
-  border-left: 3px solid var(--primary);
-  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
-  font-size: var(--text-sm);
-  line-height: var(--leading-relaxed);
-  color: var(--text);
+.techGroup li {
+  display: grid;
+  grid-template-columns: minmax(180px, 0.8fr) minmax(0, 1.2fr);
+  gap: 9px 18px;
+  padding: 16px 18px;
+  border-bottom: 1px solid var(--border);
 }
 
-.flowNote strong {
-  font-weight: var(--weight-semibold);
-}
+.techGroup li:last-child { border-bottom: 0; }
+.techName strong { display: block; color: var(--text); font-size: 14px; }
+.techName span { display: block; margin-top: 5px; color: #4f6590; font-family: var(--font-mono); font-size: 10px; line-height: 1.5; overflow-wrap: anywhere; }
+.techGroup li > p { margin: 0; color: var(--text-muted); font-size: 12px; line-height: 1.6; }
+.techGroup li > small { grid-column: 1 / -1; color: #64748b; font-size: 10px; }
 
-.footer {
-  margin-top: var(--space-8);
-  padding-top: var(--space-5);
-  border-top: 1px solid var(--border);
-  font-size: var(--text-sm);
+.blockNote {
+  max-width: 80ch;
+  margin: 10px 0 0;
   color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.diagramWrap { margin-top: 20px; }
+
+.boundary {
+  display: grid;
+  grid-template-columns: minmax(220px, 0.65fr) minmax(0, 1.35fr);
+  gap: 34px;
+  margin-top: 44px;
+  padding: 26px;
+  background: #fffaf0;
+  border: 1px solid #ead8ac;
+  border-radius: 14px;
+}
+
+.boundary ul { margin: 0; padding: 0; list-style: none; }
+.boundary li { display: grid; grid-template-columns: 34px 1fr; gap: 12px; align-items: start; padding: 12px 0; color: #594c34; border-bottom: 1px solid #eadfca; font-size: 13px; line-height: 1.6; }
+.boundary li:first-child { padding-top: 0; }
+.boundary li:last-child { padding-bottom: 0; border-bottom: 0; }
+.boundary li span { color: #a16207; font-family: var(--font-mono); font-size: 11px; font-weight: 700; }
+
+@media (max-width: 900px) {
+  .intro,
+  .boundary { grid-template-columns: 1fr; }
+  .introSide { align-items: flex-start; }
+  .metrics div { text-align: left; }
+  .blockHead { align-items: flex-start; flex-direction: column; }
+  .blockHead > p { text-align: left; }
+  .techGroups { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 540px) {
+  .intro { padding: 18px; }
+  .metrics { width: 100%; justify-content: space-between; gap: 12px; }
+  .techGroup li { grid-template-columns: 1fr; }
+  .techGroup li > small { grid-column: 1; }
+  .boundary { padding: 18px; }
 }

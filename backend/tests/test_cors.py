@@ -131,7 +131,7 @@ def test_cors_does_not_allow_credentials():
 def test_cors_allows_only_the_needed_methods_and_headers():
     kwargs = cors_kwargs()
 
-    assert set(kwargs["allow_methods"]) == {"GET", "POST", "OPTIONS"}
+    assert set(kwargs["allow_methods"]) == {"GET", "POST", "PUT", "OPTIONS"}
     assert set(kwargs["allow_headers"]) == {"Content-Type"}
 
 
@@ -210,4 +210,8 @@ def test_openapi_still_lists_every_endpoint():
         "/api/v1/rag/answer",
         # 数据采集阶段新增：知识文档上传与列表（切片 + 向量化入库）
         "/api/v1/rag/documents",
+        "/api/v1/agent/business-analysis/runs",
+        "/api/v1/agent/business-analysis/threads",
+        "/api/v1/agent/business-analysis/threads/{thread_id}",
+        "/api/v1/agent/business-analysis/preferences/{user_id}",
     }
