@@ -19,3 +19,4 @@ Task 10: complete (commits c380b57..HEAD, tests: npm run test:unit -- src/lib/ap
 Task 11: complete (commits bd4a0c1..HEAD, tests: npm run test:unit → 2 passed; targeted eslint passed; npm run build → Next.js build passed and generated /applications/business-analysis).
 Task 12: complete (history and preference APIs, PostgreSQL-backed memory/checkpoint wiring, frontend history/preferences loading; tests: targeted backend suite → 13 passed; frontend unit tests → 2 passed; targeted eslint passed; npm run build → passed).
 Task 13: complete (integration cases, evaluation fixture, README and frontend route docs, sqlglot LIMIT ALL compatibility; tests: pytest backend -q with explicit local DB config → 2063 passed; npm run lint, npx tsc --noEmit, npm run build → passed).
+Post-review fixes: CORS now permits preference PUT; run rows transition to terminal states and cancellation is committed before ending the stream; targeted lifecycle/API/integration tests → 12 passed.
