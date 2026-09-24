@@ -68,6 +68,24 @@ def test_business_analysis_threads_returns_public_history(monkeypatch):
     assert response.json() == [{"id": "run-1", "status": "completed"}]
 
 
+def test_business_analysis_threads_lists_current_user_history(monkeypatch):
+    async def fake_threads(_user_id):
+        return [{"thread_id": "thread-1", "title": "销售趋势"}]
+
+    monkeypatch.setattr(
+        "app.api.business_analysis_routes.load_user_thread_history",
+        fake_threads,
+    )
+    with TestClient(app) as client:
+        response = client.get(
+            "/api/v1/agent/business-analysis/threads",
+            params={"user_id": "user-1"},
+        )
+
+    assert response.status_code == 200
+    assert response.json() == [{"thread_id": "thread-1", "title": "销售趋势"}]
+
+
 def test_business_analysis_preferences_can_be_read_and_written(monkeypatch):
     async def fake_load(_user_id):
         return {"currency_unit": "万元"}

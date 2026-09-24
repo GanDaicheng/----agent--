@@ -124,5 +124,36 @@ async def test_runner_stops_when_tool_call_limit_is_reached(monkeypatch):
     assert events[-1].error_code == "AGENT_RUN_LIMIT_REACHED"
 
 
+@pytest.mark.anyio
+async def test_runner_injects_whitelisted_user_preferences(monkeypatch):
+    async def fake_preferences(_connection, _user_id):
+        return {"preferred_region": "华东", "report_style": "简洁"}
+
+    class PreferenceAwareAgent:
+        async def astream_events(self, payload, config, version):
+            assert payload["messages"][0]["role"] == "system"
+            assert '"preferred_region": "华东"' in payload["messages"][0]["content"]
+            assert payload["messages"][1] == {"role": "user", "content": "分析销售额"}
+            if False:
+                yield {}
+
+    monkeypatch.setattr(
+        "app.services.business_analysis_runner.load_user_preferences_from_db",
+        fake_preferences,
+    )
+    events = [
+        event
+        async for event in run_business_analysis(
+            BusinessAnalysisRequest(
+                thread_id="preferences", message="分析销售额", user_id="user-1"
+            ),
+            agent=PreferenceAwareAgent(),
+            connection=FakeConnection(),
+        )
+    ]
+
+    assert events[-1].type == "run_completed"
+
+
 async def _collect(events):
     return [event async for event in events]

@@ -18,8 +18,19 @@ export type BusinessAnalysisInput = {
 export type AnalysisThreadRun = {
   id: string;
   thread_id: string;
+  title: string;
   status: string;
+  report_id?: string | null;
+  report?: { summary?: string } | null;
   created_at?: string;
+  updated_at?: string;
+};
+
+export type AnalysisThreadSummary = {
+  thread_id: string;
+  title: string;
+  status: string;
+  report_id?: string | null;
   updated_at?: string;
 };
 
@@ -128,6 +139,14 @@ export async function loadAnalysisThread(threadId: string): Promise<AnalysisThre
   );
   if (!response.ok) throw new Error(`读取分析会话失败（${response.status}）。`);
   return (await response.json()) as AnalysisThreadRun[];
+}
+
+export async function loadAnalysisThreads(userId: string): Promise<AnalysisThreadSummary[]> {
+  const response = await fetch(
+    buildApiUrl(`/api/v1/agent/business-analysis/threads?user_id=${encodeURIComponent(userId)}`),
+  );
+  if (!response.ok) throw new Error(`读取分析会话列表失败（${response.status}）。`);
+  return (await response.json()) as AnalysisThreadSummary[];
 }
 
 export async function loadUserPreferences(userId: string): Promise<Record<string, unknown>> {

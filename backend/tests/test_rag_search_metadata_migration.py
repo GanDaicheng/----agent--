@@ -158,7 +158,7 @@ def test_migration_is_the_single_alembic_head():
 
     # The business-analysis persistence migration is now the project head and
     # depends on this RAG metadata migration.
-    assert list(heads) == ["20260924ba01"]
+    assert list(heads) == ["20260924ba02"]
 
 
 # --------------------------------------------------------------------------

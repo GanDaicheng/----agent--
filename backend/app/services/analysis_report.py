@@ -32,16 +32,22 @@ async def create_run(
     *,
     thread_id: str,
     user_id: str | None = None,
+    title: str = "新的经营分析",
 ) -> str:
     run_id = _new_id("run")
     await connection.execute(
         text(
             """
-            INSERT INTO business_analysis_runs (id, thread_id, user_id, status)
-            VALUES (:id, :thread_id, :user_id, 'running')
+            INSERT INTO business_analysis_runs (id, thread_id, user_id, title, status)
+            VALUES (:id, :thread_id, :user_id, :title, 'running')
             """
         ),
-        {"id": run_id, "thread_id": thread_id, "user_id": user_id},
+        {
+            "id": run_id,
+            "thread_id": thread_id,
+            "user_id": user_id,
+            "title": title.strip()[:80] or "新的经营分析",
+        },
     )
     return run_id
 
@@ -124,10 +130,19 @@ async def load_thread_runs(
     result = await connection.execute(
         text(
             """
-            SELECT id, thread_id, status, created_at, updated_at
-            FROM business_analysis_runs
-            WHERE thread_id = :thread_id
-            ORDER BY updated_at DESC
+            SELECT runs.id, runs.thread_id, runs.title, runs.status,
+                   runs.created_at, runs.updated_at,
+                   latest_report.id AS report_id, latest_report.report
+            FROM business_analysis_runs AS runs
+            LEFT JOIN LATERAL (
+                SELECT id, report
+                FROM business_analysis_reports
+                WHERE run_id = runs.id
+                ORDER BY created_at DESC
+                LIMIT 1
+            ) AS latest_report ON TRUE
+            WHERE runs.thread_id = :thread_id
+            ORDER BY runs.updated_at DESC
             LIMIT 50
             """
         ),
@@ -140,5 +155,49 @@ async def load_thread_runs(
             value = item.get(key)
             if hasattr(value, "isoformat"):
                 item[key] = value.isoformat()
+        rows.append(item)
+    return rows
+
+
+async def load_user_threads(
+    connection: AsyncConnection,
+    *,
+    user_id: str,
+) -> list[dict[str, object]]:
+    """Return only the latest safe summary for each thread owned by one user."""
+
+    result = await connection.execute(
+        text(
+            """
+            WITH latest_runs AS (
+                SELECT DISTINCT ON (thread_id)
+                       id, thread_id, title, status, updated_at
+                FROM business_analysis_runs
+                WHERE user_id = :user_id
+                ORDER BY thread_id, updated_at DESC
+            )
+            SELECT latest_runs.thread_id, latest_runs.title,
+                   latest_runs.status, latest_runs.updated_at,
+                   latest_report.id AS report_id
+            FROM latest_runs
+            LEFT JOIN LATERAL (
+                SELECT id
+                FROM business_analysis_reports
+                WHERE run_id = latest_runs.id
+                ORDER BY created_at DESC
+                LIMIT 1
+            ) AS latest_report ON TRUE
+            ORDER BY latest_runs.updated_at DESC
+            LIMIT 50
+            """
+        ),
+        {"user_id": user_id},
+    )
+    rows: list[dict[str, object]] = []
+    for row in result.mappings().all():
+        item = dict(row)
+        updated_at = item.get("updated_at")
+        if hasattr(updated_at, "isoformat"):
+            item["updated_at"] = updated_at.isoformat()
         rows.append(item)
     return rows

@@ -15,7 +15,7 @@ from app.agent.business_analysis.memory import (
 )
 from app.agent.business_analysis.schemas import AnalysisEvent, BusinessAnalysisRequest
 from app.repositories.database import get_engine
-from app.services.analysis_report import load_thread_runs
+from app.services.analysis_report import load_thread_runs, load_user_threads
 from app.services.business_analysis_runner import (
     BusinessAnalysisBusyError,
     is_thread_busy,
@@ -38,6 +38,11 @@ class PreferenceRequest(BaseModel):
 async def load_thread_history(thread_id: str) -> list[dict[str, object]]:
     async with get_engine().connect() as connection:
         return await load_thread_runs(connection, thread_id=thread_id)
+
+
+async def load_user_thread_history(user_id: str) -> list[dict[str, object]]:
+    async with get_engine().connect() as connection:
+        return await load_user_threads(connection, user_id=user_id)
 
 
 async def load_user_preferences_api(user_id: str) -> dict[str, Any]:
@@ -80,6 +85,13 @@ async def business_analysis_run(request: BusinessAnalysisRequest) -> StreamingRe
             "X-Accel-Buffering": "no",
         },
     )
+
+
+@router.get("/api/v1/agent/business-analysis/threads")
+async def business_analysis_threads(user_id: str) -> list[dict[str, object]]:
+    if not user_id.strip() or len(user_id) > 128:
+        raise HTTPException(status_code=422, detail="user_id 不合法。")
+    return await load_user_thread_history(user_id)
 
 
 @router.get("/api/v1/agent/business-analysis/threads/{thread_id}")

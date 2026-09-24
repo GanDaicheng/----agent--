@@ -8,6 +8,7 @@ import { isAbortError } from "@/lib/api/http";
 import {
   createAnonymousUserId,
   loadAnalysisThread,
+  loadAnalysisThreads,
   loadUserPreferences,
   runBusinessAnalysis,
   type BusinessAnalysisEvent,
@@ -57,6 +58,20 @@ export function BusinessAnalysisWorkspace() {
       .then((preferences) => {
         const region = preferences.preferred_region;
         if (typeof region === "string" && region) setPreferenceHint(`已加载偏好：${region}`);
+      })
+      .catch(() => undefined);
+  }, [userId]);
+
+  useEffect(() => {
+    void loadAnalysisThreads(userId)
+      .then((items) => {
+        setThreads(items.map((item) => ({
+          id: item.thread_id,
+          title: item.title,
+          updatedAt: item.updated_at
+            ? new Date(item.updated_at).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })
+            : "历史会话",
+        })));
       })
       .catch(() => undefined);
   }, [userId]);
@@ -115,10 +130,14 @@ export function BusinessAnalysisWorkspace() {
     try {
       const runs = await loadAnalysisThread(thread.id);
       if (runs.length > 0) {
+        const latest = runs[0];
+        const restoredReport = latest.report?.summary;
+        if (typeof restoredReport === "string" && restoredReport) setReport(restoredReport);
         setMessages([
+          { role: "user", content: latest.title },
           {
             role: "assistant",
-            content: `已恢复该会话，共 ${runs.length} 次分析任务；最近一次状态：${runs[0].status}。`,
+            content: `已恢复该会话，共 ${runs.length} 次分析任务；最近一次状态：${latest.status}。`,
           },
         ]);
       }
