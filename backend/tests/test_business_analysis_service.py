@@ -125,6 +125,36 @@ async def test_runner_stops_when_tool_call_limit_is_reached(monkeypatch):
 
 
 @pytest.mark.anyio
+async def test_runner_marks_timed_out_runs_with_a_safe_error(monkeypatch):
+    class SlowAgent:
+        async def astream_events(self, payload, config, version):
+            await asyncio.sleep(0.02)
+            if False:
+                yield {}
+
+    monkeypatch.setattr(
+        "app.services.business_analysis_runner.get_settings",
+        lambda: SimpleNamespace(
+            business_analysis_max_steps=12,
+            business_analysis_max_tool_calls=8,
+            business_analysis_run_timeout_seconds=0.001,
+            business_analysis_context_char_limit=12000,
+        ),
+    )
+    events = [
+        event
+        async for event in run_business_analysis(
+            BusinessAnalysisRequest(thread_id="timed-out", message="分析销售额"),
+            agent=SlowAgent(),
+            connection=FakeConnection(),
+        )
+    ]
+
+    assert events[-1].type == "error"
+    assert events[-1].error_code == "AGENT_RUN_TIMEOUT"
+
+
+@pytest.mark.anyio
 async def test_runner_injects_whitelisted_user_preferences(monkeypatch):
     async def fake_preferences(_connection, _user_id):
         return {"preferred_region": "华东", "report_style": "简洁"}

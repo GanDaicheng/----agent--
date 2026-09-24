@@ -22,3 +22,4 @@ Task 13: complete (integration cases, evaluation fixture, README and frontend ro
 Post-review fixes: CORS now permits preference PUT; run rows transition to terminal states and cancellation is committed before ending the stream; targeted lifecycle/API/integration tests → 12 passed.
 Completion-audit follow-up: persisted preference values are injected as bounded, non-authoritative Agent context; new thread-list/report-history API and UI recovery path added; migration head advanced to 20260924ba02 and applied to local PostgreSQL; full backend suite → 2066 passed, frontend lint/unit/typecheck/build → passed.
 Final preference audit: default analysis region is now editable in the workspace and persisted through a fixed-enum API; full backend suite → 2068 passed, frontend lint/unit/typecheck/build → passed.
+Final acceptance: explicit timeout regression added; pytest backend/tests/test_business_analysis_service.py → 5 passed.
