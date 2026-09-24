@@ -30,4 +30,4 @@ EXPOSE 8000
 
 # 生产不用 --reload：热重载是开发期特性，会常驻文件监听进程，且行为不稳定。
 # host 必须是 0.0.0.0 而不是 127.0.0.1，否则容器外（宿主机、Compose 网络）访问不到。
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--loop", "app.core.event_loop:selector_loop_factory"]

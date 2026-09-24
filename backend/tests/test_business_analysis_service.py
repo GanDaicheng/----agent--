@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -152,6 +153,108 @@ async def test_runner_marks_timed_out_runs_with_a_safe_error(monkeypatch):
 
     assert events[-1].type == "error"
     assert events[-1].error_code == "AGENT_RUN_TIMEOUT"
+
+
+@pytest.mark.anyio
+async def test_streamed_tokens_do_not_consume_agent_step_budget(monkeypatch):
+    class StreamingAgent:
+        async def astream_events(self, payload, config, version):
+            yield {"event": "on_chat_model_start", "name": "ChatOpenAI"}
+            for token in ("核", "心", "结", "论"):
+                yield {
+                    "event": "on_chat_model_stream",
+                    "data": {"chunk": SimpleNamespace(content=token)},
+                }
+
+    monkeypatch.setattr(
+        "app.services.business_analysis_runner.get_settings",
+        lambda: SimpleNamespace(
+            business_analysis_max_steps=1,
+            business_analysis_max_tool_calls=8,
+            business_analysis_run_timeout_seconds=90,
+            business_analysis_context_char_limit=12000,
+        ),
+    )
+    events = [
+        event
+        async for event in run_business_analysis(
+            BusinessAnalysisRequest(thread_id="streamed", message="分析销售额"),
+            agent=StreamingAgent(),
+            connection=FakeConnection(),
+        )
+    ]
+
+    assert events[-1].type == "run_completed"
+    assert "".join(event.content or "" for event in events if event.type == "report_delta") == "核心结论"
+
+
+@pytest.mark.anyio
+async def test_nested_tool_model_calls_do_not_consume_supervisor_step_budget(monkeypatch):
+    class NestedModelAgent:
+        async def astream_events(self, payload, config, version):
+            for _ in range(3):
+                yield {
+                    "event": "on_chat_model_start",
+                    "metadata": {"langgraph_node": "generate_sql"},
+                }
+            yield {
+                "event": "on_chat_model_start",
+                "metadata": {"langgraph_node": "model"},
+            }
+
+    monkeypatch.setattr(
+        "app.services.business_analysis_runner.get_settings",
+        lambda: SimpleNamespace(
+            business_analysis_max_steps=1,
+            business_analysis_max_tool_calls=8,
+            business_analysis_run_timeout_seconds=90,
+            business_analysis_context_char_limit=12000,
+        ),
+    )
+    events = [
+        event
+        async for event in run_business_analysis(
+            BusinessAnalysisRequest(thread_id="nested", message="分析销售额"),
+            agent=NestedModelAgent(),
+            connection=FakeConnection(),
+        )
+    ]
+
+    assert events[-1].type == "run_completed"
+
+
+@pytest.mark.anyio
+async def test_tool_completed_event_exposes_only_the_tool_summary():
+    class VerboseToolAgent:
+        async def astream_events(self, payload, config, version):
+            yield {"event": "on_tool_start", "name": "analyze_business_data"}
+            yield {
+                "event": "on_tool_end",
+                "name": "analyze_business_data",
+                "data": {
+                    "output": json.dumps(
+                        {
+                            "status": "ok",
+                            "summary": "销售额在年末达到峰值。",
+                            "data": {"rows": [{"private_detail": "do not stream"}]},
+                        },
+                        ensure_ascii=False,
+                    )
+                },
+            }
+
+    events = [
+        event
+        async for event in run_business_analysis(
+            BusinessAnalysisRequest(thread_id="tool-summary", message="分析销售额"),
+            agent=VerboseToolAgent(),
+            connection=FakeConnection(),
+        )
+    ]
+
+    completed = next(event for event in events if event.type == "tool_completed")
+    assert completed.summary == "销售额在年末达到峰值。"
+    assert "private_detail" not in completed.to_sse_payload()
 
 
 @pytest.mark.anyio

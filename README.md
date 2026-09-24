@@ -172,7 +172,7 @@ backend 容器用的连接串是 `DATABASE_URL_DOCKER`，它的主机名是 Comp
 > docker compose up -d postgres    # 1. 先在项目根目录起数据库
 > docker compose ps                # 2. 等到 STATUS 显示 healthy
 > cd backend                       # 3. 再起后端
-> uvicorn app.main:app --reload
+> uvicorn app.main:app --reload --loop app.core.event_loop:selector_loop_factory
 > ```
 
 ### 1. 准备虚拟环境
@@ -198,7 +198,7 @@ Copy-Item .env.example .env
 
 ```powershell
 cd backend
-uvicorn app.main:app --reload
+uvicorn app.main:app --reload --loop app.core.event_loop:selector_loop_factory
 ```
 
 接口地址：
@@ -855,12 +855,15 @@ Next.js 页面，通过 SSE 实时展示 Agent 的状态、工具调用和报告
 ```powershell
 cd backend
 python -m alembic upgrade head
-uvicorn app.main:app --reload
+uvicorn app.main:app --reload --loop app.core.event_loop:selector_loop_factory
 
 # 另一个终端
 cd frontend
 npm run dev
 ```
+
+Windows 本地启动命令中保留 `selector_loop_factory`：LangGraph PostgreSQL
+Checkpoint/Store 使用的 `psycopg` 异步连接不兼容 Windows 默认 Proactor 事件循环。
 
 访问 `http://localhost:3000/applications/business-analysis`。作品集阶段的用户标识由浏览器
 生成匿名 UUID，只用于演示会话记忆，不能当作生产身份认证。
