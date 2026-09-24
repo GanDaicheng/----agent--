@@ -158,16 +158,26 @@ export function ArchitectureExplorer() {
             <svg className={styles.edges} aria-hidden="true">
               <defs>
                 <marker id="architecture-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse">
-                  <path d="M 0 0 L 10 5 L 0 10 z" />
+                  <path d="M 0 0 L 10 5 L 0 10 z" fill="context-stroke" />
                 </marker>
                 <marker id="architecture-arrow-active" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-                  <path d="M 0 0 L 10 5 L 0 10 z" />
+                  <path d="M 0 0 L 10 5 L 0 10 z" fill="context-stroke" />
                 </marker>
               </defs>
               {edgeGeometry.map((edge) => {
                 const active = highlight.edgeIds.has(edge.id);
+                const lineStyleClass =
+                  highlight.workflow.lineStyle === "dashed"
+                    ? styles.edgeDashed
+                    : highlight.workflow.lineStyle === "double"
+                      ? styles.edgeDouble
+                      : styles.edgeSolid;
                 return (
-                  <g key={edge.id} className={active ? styles.edgeActive : styles.edgeMuted}>
+                  <g
+                    key={edge.id}
+                    className={active ? `${styles.edgeActive} ${lineStyleClass}` : styles.edgeMuted}
+                    style={{ "--edge-color": highlight.workflow.color } as React.CSSProperties}
+                  >
                     <path
                       d={edge.path}
                       markerEnd={active ? "url(#architecture-arrow-active)" : "url(#architecture-arrow)"}
@@ -272,4 +282,3 @@ export function ArchitectureExplorer() {
     </>
   );
 }
-
