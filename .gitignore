@@ -43,3 +43,4 @@ Thumbs.db
 /codex数据/
 /build_word_plan.py
 /*.docx
+.worktrees/
