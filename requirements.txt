@@ -26,3 +26,10 @@ pdfplumber
 sqlalchemy[asyncio]
 asyncpg
 alembic
+
+# 精排接口的 HTTP 客户端：百炼的 rerank 是一个独立的 /reranks 路径，
+# 不是 OpenAI 的 /chat/completions 形状，套 openai SDK 反而要绕。
+# app/services/reranker.py 直接 import 它，所以必须显式声明——
+# 不能靠 fastapi 的 TestClient 间接带进来：那是开发期依赖，
+# 生产镜像里可能只装本文件列出的包。
+httpx>=0.27,<1

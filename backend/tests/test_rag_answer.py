@@ -23,10 +23,12 @@ from sqlalchemy.exc import OperationalError
 from app.api import routes
 from app.core.exceptions import ConfigurationError
 from app.main import app
+from app.services.knowledge_retrieval import RetrievalResult
 from app.services.knowledge_search import (
     DEFAULT_TOP_K,
     MAX_TOP_K,
     MIN_TOP_K,
+    ChunkContent,
     KnowledgeSearchError,
     KnowledgeSearchResult,
 )
@@ -38,12 +40,14 @@ from app.services.rag_answer import (
     PREVIEW_MAX_CHARS,
     RAG_PROMPT,
     RagAnswerDraft,
+    RagRetrievalSummary,
     answer_from_knowledge,
     build_knowledge_block,
     build_preview,
     build_rag_message,
     to_sources,
 )
+from app.services.retrieval_fusion import RetrievalCandidate
 
 ENDPOINT = "/api/v1/rag/answer"
 
@@ -728,3 +732,764 @@ def test_rag_route_is_post_only():
     methods = app.openapi()["paths"][ENDPOINT]
 
     assert set(methods) == {"post"}
+
+
+# ==========================================================================
+# RAG-13.6：接入混合检索 + 精排
+#
+# 这一节盯四件事：
+# 1. 生产路径确实走 retrieve_knowledge，而不是旧的纯向量 searcher；
+# 2. 旧 searcher 注入缝还活着（既有 62 条测试全靠它）；
+# 3. 回答模型拿到的资料顺序 = 最终排序，且看不到任何内部排名与分数；
+# 4. 关键词独占的来源如实表达（distance/similarity 为 None，不补 0）。
+# ==========================================================================
+
+
+def make_retrieval_chunk(chunk_id: int = 1, **overrides) -> ChunkContent:
+    values = {
+        "chunk_id": chunk_id,
+        "document_id": 1,
+        "source_file": "retail_metrics.md",
+        "document_title": "零售核心指标口径说明",
+        "section_title": "客单价",
+        "chunk_index": 4,
+        "content": "客单价 = 销售额 / 订单数",
+        "embedding_model": "text-embedding-v4",
+    }
+    values.update(overrides)
+    return ChunkContent(**values)
+
+
+def make_vector_candidate(chunk_id: int = 1, **overrides) -> RetrievalCandidate:
+    """两路都命中的候选：既有向量分数，也有关键词分数。"""
+    values = {
+        "chunk": make_retrieval_chunk(chunk_id),
+        "vector_rank": 1,
+        "keyword_rank": 2,
+        "rrf_score": 0.03,
+        "matched_queries": ("客单价怎么算？",),
+        "distance": 0.19,
+        "similarity": 0.81,
+        "keyword_score": 88.0,
+        "matched_terms": ("keywords_exact",),
+        "rerank_score": 0.95,
+    }
+    values.update(overrides)
+    return RetrievalCandidate(**values)
+
+
+def make_keyword_only_candidate(chunk_id: int = 2, **overrides) -> RetrievalCandidate:
+    """★ 只被关键词召回的候选：**没有**向量分数。
+
+    它不是 0，是「没有」——这正是 keyword-only 要如实表达的东西。
+    """
+    values = {
+        "chunk": make_retrieval_chunk(
+            chunk_id, section_title="会员等级与复购", content="复购率按客户是否多次下单计算。"
+        ),
+        "vector_rank": None,
+        "keyword_rank": 1,
+        "rrf_score": 0.0164,
+        "matched_queries": ("客单价",),
+        "distance": None,
+        "similarity": None,
+        "keyword_score": 80.0,
+        "matched_terms": ("search_text_contains",),
+        "rerank_score": 0.6,
+    }
+    values.update(overrides)
+    return RetrievalCandidate(**values)
+
+
+def make_retrieval_result(
+    *,
+    candidates=None,
+    search_queries=("客单价怎么算？",),
+    considered=None,
+    applied=False,
+) -> RetrievalResult:
+    candidates = list(candidates or [])
+    return RetrievalResult(
+        original_query="客单价怎么算？",
+        search_queries=tuple(search_queries),
+        candidates_considered=len(candidates) if considered is None else considered,
+        rerank_applied=applied,
+        results=tuple(candidates),
+    )
+
+
+class FakeRetriever:
+    """记录调用参数，返回预设的 RetrievalResult 或抛异常。"""
+
+    def __init__(self, result=None, *, error=None) -> None:
+        self.result = result if result is not None else make_retrieval_result()
+        self.error = error
+        self.calls: list[tuple[str, int | None]] = []
+
+    @property
+    def final_top_k(self) -> int | None:
+        return self.calls[-1][1]
+
+    async def __call__(self, question, *, final_top_k=None, **kwargs):
+        self.calls.append((question, final_top_k))
+        if self.error is not None:
+            raise self.error
+        return self.result
+
+
+def run_new_path(question="客单价怎么算？", *, retriever=None, llm=None, **kwargs):
+    retriever = retriever if retriever is not None else FakeRetriever()
+    if llm is None:
+        llm = StubLlm()
+    answer = asyncio.run(
+        answer_from_knowledge(question, retriever=retriever, llm=llm, **kwargs)
+    )
+    return answer, retriever, llm
+
+
+# --------------------------------------------------------------------------
+# 生产路径与兼容路径
+# --------------------------------------------------------------------------
+
+
+def test_the_default_path_uses_the_new_retriever(monkeypatch):
+    """★ 生产默认必须走 retrieve_knowledge——否则「上线忘了接线」没人发现。"""
+    calls = []
+
+    async def fake_retrieve(question, *, final_top_k=None, **kwargs):
+        calls.append((question, final_top_k))
+        return make_retrieval_result(candidates=[make_vector_candidate()])
+
+    # 打桩的是 rag_answer 模块里的那个名字（它才是默认值的来源）
+    monkeypatch.setattr(
+        "app.services.rag_answer.retrieve_knowledge", fake_retrieve
+    )
+
+    answer = asyncio.run(answer_from_knowledge("客单价怎么算？", llm=StubLlm()))
+
+    assert calls == [("客单价怎么算？", DEFAULT_TOP_K)]
+    assert answer.status == "ok"
+
+
+def test_the_default_path_does_not_use_the_legacy_searcher(monkeypatch):
+    """★ 不传 searcher 时，旧的纯向量检索一次都不能被调用。"""
+
+    def explode(*args, **kwargs):
+        raise AssertionError("默认路径不该调用纯向量 searcher")
+
+    monkeypatch.setattr("app.services.rag_answer.search_knowledge", explode)
+
+    async def fake_retrieve(question, *, final_top_k=None, **kwargs):
+        return make_retrieval_result(candidates=[make_vector_candidate()])
+
+    monkeypatch.setattr("app.services.rag_answer.retrieve_knowledge", fake_retrieve)
+
+    answer = asyncio.run(answer_from_knowledge("客单价怎么算？", llm=StubLlm()))
+
+    assert answer.status == "ok"
+
+
+def test_an_explicit_searcher_still_works():
+    """既有测试全靠这条路：显式注入 searcher 时走旧的纯向量路径。"""
+    seen: list = []
+
+    answer = asyncio.run(
+        answer_from_knowledge(
+            "客单价怎么算？",
+            searcher=make_searcher([make_result()], record=seen),
+            llm=StubLlm(),
+        )
+    )
+
+    assert seen == [("客单价怎么算？", DEFAULT_TOP_K)]
+    assert answer.status == "ok"
+    assert answer.sources[0].distance == pytest.approx(0.19)
+
+
+def test_both_retriever_and_searcher_is_rejected():
+    """★ 同时给两个依赖 → 直接报错，而不是「谁赢」这种要读实现的规则。"""
+    retriever = FakeRetriever()
+
+    with pytest.raises(ValueError) as error:
+        asyncio.run(
+            answer_from_knowledge(
+                "客单价怎么算？",
+                retriever=retriever,
+                searcher=make_searcher([make_result()]),
+                llm=StubLlm(),
+            )
+        )
+
+    assert "retriever" in str(error.value)
+    assert retriever.calls == []
+
+
+def test_the_searcher_path_never_touches_the_production_retriever(monkeypatch):
+    """★ 显式走 searcher 时，生产检索链路一次都不该被碰到。"""
+
+    def explode(*args, **kwargs):
+        raise AssertionError("走 searcher 时不该碰生产检索链路")
+
+    monkeypatch.setattr("app.services.rag_answer.retrieve_knowledge", explode)
+
+    answer = asyncio.run(
+        answer_from_knowledge(
+            "客单价怎么算？", searcher=make_searcher([make_result()]), llm=StubLlm()
+        )
+    )
+
+    assert answer.status == "ok"
+
+
+def test_top_k_becomes_the_final_top_k_for_the_retriever():
+    """★ 请求里的 top_k 就是「最终留几条」，它被转成 final_top_k 传给检索。"""
+    _, retriever, _ = run_new_path(top_k=3)
+
+    assert retriever.final_top_k == 3
+
+
+# --------------------------------------------------------------------------
+# 资料顺序与模型看到的内容
+# --------------------------------------------------------------------------
+
+
+def test_the_final_order_reaches_the_knowledge_block():
+    """★ 知识块里的顺序必须与最终排序一致。
+
+    顺序错了不会报错，只会让模型先看到不该优先的资料——
+    而「优先看哪几条」正是精排存在的意义。
+    """
+    candidates = [
+        make_keyword_only_candidate(7),
+        make_vector_candidate(3),
+    ]
+    llm = StubLlm()
+
+    asyncio.run(
+        answer_from_knowledge(
+            "客单价怎么算？",
+            retriever=FakeRetriever(make_retrieval_result(candidates=candidates)),
+            llm=llm,
+        )
+    )
+
+    message = llm.structured.messages[1][1]
+    # 用「资料序号 + 来源」整串来定位：只搜小节名的话，
+    # 会先命中上面那行「用户问题：客单价怎么算？」里的字。
+    first = message.index("[资料 1] 来源：retail_metrics.md / 会员等级与复购")
+    second = message.index("[资料 2] 来源：retail_metrics.md / 客单价")
+    assert first < second
+
+
+def test_the_model_receives_the_original_question():
+    llm = StubLlm()
+
+    asyncio.run(
+        answer_from_knowledge(
+            "  客单价怎么算？  ",
+            retriever=FakeRetriever(make_retrieval_result(candidates=[make_vector_candidate()])),
+            llm=llm,
+        )
+    )
+
+    assert "用户问题：客单价怎么算？" in llm.structured.messages[1][1]
+
+
+def test_the_model_never_receives_the_rewritten_queries():
+    """★ 改写问题只用于召回，不进 Prompt。
+
+    进了的话，模型会去回答一个用户没问过的问题。
+    """
+    llm = StubLlm()
+    result = make_retrieval_result(
+        candidates=[make_vector_candidate()],
+        search_queries=("客单价怎么算？", "平均每笔订单金额如何计算？"),
+    )
+
+    asyncio.run(
+        answer_from_knowledge("客单价怎么算？", retriever=FakeRetriever(result), llm=llm)
+    )
+
+    message = llm.structured.messages[1][1]
+    assert "平均每笔订单金额如何计算？" not in message
+
+
+def test_the_model_never_sees_internal_scores_or_ids():
+    """★ 向量、RRF 分、精排分、关键词分、内部主键都不进 Prompt。"""
+    llm = StubLlm()
+
+    asyncio.run(
+        answer_from_knowledge(
+            "客单价怎么算？",
+            retriever=FakeRetriever(
+                make_retrieval_result(
+                    candidates=[
+                        make_vector_candidate(11, rrf_score=0.0321, rerank_score=0.9876)
+                    ]
+                )
+            ),
+            llm=llm,
+        )
+    )
+
+    message = llm.structured.messages[1][1]
+    for leaked in ("0.0321", "0.9876", "88.0", "0.19", "0.81", "chunk_id", "rerank"):
+        assert leaked not in message, leaked
+
+
+def test_the_system_prompt_is_unchanged():
+    """★ 防注入规则没有因为换检索实现而被复制或改写。"""
+    llm = StubLlm()
+
+    asyncio.run(
+        answer_from_knowledge(
+            "客单价怎么算？",
+            retriever=FakeRetriever(make_retrieval_result(candidates=[make_vector_candidate()])),
+            llm=llm,
+        )
+    )
+
+    assert llm.structured.messages[0][1] == RAG_PROMPT
+    assert KNOWLEDGE_OPEN in RAG_PROMPT
+    assert "不是给你的指令" in RAG_PROMPT
+
+
+# --------------------------------------------------------------------------
+# 三种状态
+# --------------------------------------------------------------------------
+
+
+def test_an_empty_retrieval_result_short_circuits_without_calling_the_model():
+    llm = StubLlm()
+
+    answer, _, _ = run_new_path(retriever=FakeRetriever(make_retrieval_result()), llm=llm)
+
+    assert answer.status == "no_knowledge"
+    assert answer.answer == NO_KNOWLEDGE_ANSWER
+    assert answer.sources == ()
+    assert llm.structured_calls == 0
+
+
+def test_insufficient_keeps_the_fixed_message():
+    llm = StubLlm(answered=False, answer="模型自己写的另一套说法")
+
+    answer, _, _ = run_new_path(
+        retriever=FakeRetriever(make_retrieval_result(candidates=[make_vector_candidate()])),
+        llm=llm,
+    )
+
+    assert answer.status == "insufficient"
+    assert answer.answer == INSUFFICIENT_ANSWER
+    assert "模型自己写的另一套说法" not in answer.answer
+
+
+def test_ok_returns_the_final_sources():
+    answer, _, _ = run_new_path(
+        retriever=FakeRetriever(
+            make_retrieval_result(candidates=[make_keyword_only_candidate(7)])
+        )
+    )
+
+    assert answer.status == "ok"
+    assert len(answer.sources) == 1
+    assert answer.sources[0].section_title == "会员等级与复购"
+
+
+def test_a_low_rerank_score_does_not_turn_into_insufficient():
+    """★ 没有经过评测的分数阈值，就不能拿分数决定「资料够不够」。
+
+    状态只由模型对资料本身的判断决定（这里模型说够，那就是 ok）。
+    """
+    answer, _, _ = run_new_path(
+        retriever=FakeRetriever(
+            make_retrieval_result(
+                candidates=[make_vector_candidate(rerank_score=0.01)], applied=True
+            )
+        )
+    )
+
+    assert answer.status == "ok"
+
+
+# --------------------------------------------------------------------------
+# 来源的诚实表达
+# --------------------------------------------------------------------------
+
+
+def test_a_keyword_only_source_has_no_vector_scores():
+    """★ keyword-only 的 distance / similarity 必须是 None。"""
+    answer, _, _ = run_new_path(
+        retriever=FakeRetriever(
+            make_retrieval_result(candidates=[make_keyword_only_candidate(7)])
+        )
+    )
+
+    source = answer.sources[0]
+    assert source.distance is None
+    assert source.similarity is None
+    assert source.keyword_score == pytest.approx(80.0)
+    assert source.rrf_score is not None
+
+
+def test_a_vector_source_keeps_its_real_scores():
+    answer, _, _ = run_new_path(
+        retriever=FakeRetriever(
+            make_retrieval_result(candidates=[make_vector_candidate()])
+        )
+    )
+
+    source = answer.sources[0]
+    assert source.distance == pytest.approx(0.19)
+    assert source.similarity == pytest.approx(0.81)
+
+
+def test_a_keyword_only_source_is_not_dropped():
+    """★ 没有向量分数不等于「不该作为来源」——它确实命中了检索词。"""
+    candidates = [make_keyword_only_candidate(7), make_vector_candidate(3)]
+
+    answer, _, _ = run_new_path(
+        retriever=FakeRetriever(make_retrieval_result(candidates=candidates))
+    )
+
+    assert len(answer.sources) == 2
+    assert answer.sources[0].distance is None
+
+
+def test_the_legacy_path_has_no_extra_scores():
+    """旧纯向量路径确实没有 RRF 分和精排分——给 None，不给 0。"""
+    answer = asyncio.run(
+        answer_from_knowledge(
+            "客单价怎么算？", searcher=make_searcher([make_result()]), llm=StubLlm()
+        )
+    )
+
+    source = answer.sources[0]
+    assert source.keyword_score is None
+    assert source.rrf_score is None
+    assert source.rerank_score is None
+
+
+def test_sources_never_expose_internal_keys():
+    answer, _, _ = run_new_path(
+        retriever=FakeRetriever(
+            make_retrieval_result(candidates=[make_keyword_only_candidate(7)])
+        )
+    )
+
+    source = answer.sources[0]
+    for forbidden in ("chunk_id", "document_id", "embedding", "content_for_embedding"):
+        assert not hasattr(source, forbidden), forbidden
+
+
+def test_the_preview_still_comes_from_the_real_chunk_text():
+    answer, _, _ = run_new_path(
+        retriever=FakeRetriever(
+            make_retrieval_result(candidates=[make_vector_candidate()])
+        )
+    )
+
+    assert answer.sources[0].preview == "客单价 = 销售额 / 订单数"
+
+
+# --------------------------------------------------------------------------
+# 检索摘要
+# --------------------------------------------------------------------------
+
+
+def test_the_summary_is_built_from_the_retrieval_result():
+    result = make_retrieval_result(
+        candidates=[make_vector_candidate(), make_keyword_only_candidate(7)],
+        search_queries=("客单价怎么算？", "改写的问法"),
+        considered=20,
+        applied=True,
+    )
+
+    answer, _, _ = run_new_path(retriever=FakeRetriever(result))
+
+    assert isinstance(answer.retrieval, RagRetrievalSummary)
+    assert answer.retrieval.query_rewritten is True
+    assert answer.retrieval.query_count == 2
+    assert answer.retrieval.candidates_considered == 20
+    assert answer.retrieval.rerank_applied is True
+    assert answer.retrieval.final_count == 2
+
+
+def test_the_summary_says_no_rewrite_when_only_the_original_was_used():
+    result = make_retrieval_result(
+        candidates=[make_vector_candidate()], search_queries=("客单价怎么算？",)
+    )
+
+    answer, _, _ = run_new_path(retriever=FakeRetriever(result))
+
+    assert answer.retrieval.query_rewritten is False
+    assert answer.retrieval.query_count == 1
+
+
+def test_the_legacy_path_has_no_summary():
+    """编一份摘要出来就是一串看着像真的的假数字。"""
+    answer = asyncio.run(
+        answer_from_knowledge(
+            "客单价怎么算？", searcher=make_searcher([make_result()]), llm=StubLlm()
+        )
+    )
+
+    assert answer.retrieval is None
+
+
+def test_the_summary_never_carries_the_rewritten_text():
+    result = make_retrieval_result(
+        candidates=[make_vector_candidate()],
+        search_queries=("客单价怎么算？", "平均每笔订单金额如何计算？"),
+    )
+
+    answer, _, _ = run_new_path(retriever=FakeRetriever(result))
+
+    assert "平均每笔订单金额如何计算？" not in repr(answer.retrieval)
+    assert "平均订单金额" not in repr(answer.retrieval)
+
+
+# --------------------------------------------------------------------------
+# 新链路在 API 层的表现
+# --------------------------------------------------------------------------
+
+
+def patch_new_service(monkeypatch, *, result=None, error=None):
+    """把路由里的 answer_from_knowledge 换成替身，返回调用记录。"""
+    calls: list[tuple[str, int]] = []
+
+    async def fake_answer(question: str, *, top_k: int = DEFAULT_TOP_K):
+        calls.append((question, top_k))
+        if error is not None:
+            raise error
+        return result
+
+    monkeypatch.setattr(routes, "answer_from_knowledge", fake_answer)
+    return calls
+
+
+def test_endpoint_serializes_a_keyword_only_source_as_null(monkeypatch):
+    """★ 没有向量分数就序列化成 null，不能变成 0。
+
+    null 是「没有这个数」，0 是「相似度为零」——后者会让前端显示出
+    「相似度 0.0000」却排在前面，看的人只会更糊涂。
+    """
+    from app.services.rag_answer import RagAnswer, RagSource
+
+    patch_new_service(
+        monkeypatch,
+        result=RagAnswer(
+            status="ok",
+            answer="回答内容",
+            sources=(
+                RagSource(
+                    source_file="member_rules.md",
+                    document_title="会员规则",
+                    section_title="复购",
+                    chunk_index=2,
+                    preview="复购率按客户是否多次下单计算。",
+                    distance=None,
+                    similarity=None,
+                    keyword_score=80.0,
+                    rrf_score=0.0164,
+                ),
+            ),
+        ),
+    )
+
+    with TestClient(app) as client:
+        response = client.post(ENDPOINT, json={"question": "复购怎么算？"})
+
+    assert response.status_code == 200
+    source = response.json()["sources"][0]
+    assert source["distance"] is None
+    assert source["similarity"] is None
+    assert source["keyword_score"] == pytest.approx(80.0)
+    # 来源没有被丢掉
+    assert source["section_title"] == "复购"
+
+
+def test_endpoint_still_serializes_vector_scores_as_numbers(monkeypatch):
+    from app.services.rag_answer import RagAnswer, RagSource
+
+    patch_new_service(
+        monkeypatch,
+        result=RagAnswer(
+            status="ok",
+            answer="回答内容",
+            sources=(
+                RagSource(
+                    source_file="retail_metrics.md",
+                    document_title="零售核心指标口径说明",
+                    section_title="客单价",
+                    chunk_index=4,
+                    preview="客单价 = 销售额 / 订单数",
+                    distance=0.19,
+                    similarity=0.81,
+                    rerank_score=0.95,
+                ),
+            ),
+        ),
+    )
+
+    with TestClient(app) as client:
+        response = client.post(ENDPOINT, json={"question": "客单价怎么算？"})
+
+    source = response.json()["sources"][0]
+    assert source["distance"] == pytest.approx(0.19)
+    assert source["similarity"] == pytest.approx(0.81)
+    assert source["rerank_score"] == pytest.approx(0.95)
+
+
+def test_endpoint_returns_the_retrieval_summary(monkeypatch):
+    from app.services.rag_answer import RagAnswer, RagRetrievalSummary
+
+    patch_new_service(
+        monkeypatch,
+        result=RagAnswer(
+            status="ok",
+            answer="回答内容",
+            sources=(),
+            retrieval=RagRetrievalSummary(
+                query_rewritten=True,
+                query_count=3,
+                candidates_considered=20,
+                rerank_applied=True,
+                final_count=5,
+            ),
+        ),
+    )
+
+    with TestClient(app) as client:
+        response = client.post(ENDPOINT, json={"question": "客单价怎么算？"})
+
+    retrieval = response.json()["retrieval"]
+    assert retrieval == {
+        "query_rewritten": True,
+        "query_count": 3,
+        "candidates_considered": 20,
+        "rerank_applied": True,
+        "final_count": 5,
+    }
+
+
+def test_endpoint_serializes_a_missing_summary_as_null(monkeypatch):
+    """旧路径没有摘要，字段是 null 而不是缺字段——客户端不用做两种判断。"""
+    from app.services.rag_answer import RagAnswer
+
+    patch_new_service(
+        monkeypatch, result=RagAnswer(status="ok", answer="回答内容", sources=())
+    )
+
+    with TestClient(app) as client:
+        response = client.post(ENDPOINT, json={"question": "客单价怎么算？"})
+
+    assert response.json()["retrieval"] is None
+
+
+def test_the_summary_never_carries_sensitive_data(monkeypatch):
+    """★ 摘要里只有计数与布尔值：没有改写正文、关键词、Prompt、向量、主键。"""
+    from app.services.rag_answer import RagAnswer, RagRetrievalSummary
+
+    patch_new_service(
+        monkeypatch,
+        result=RagAnswer(
+            status="ok",
+            answer="回答内容",
+            sources=(),
+            retrieval=RagRetrievalSummary(
+                query_rewritten=True,
+                query_count=3,
+                candidates_considered=20,
+                rerank_applied=True,
+                final_count=5,
+            ),
+        ),
+    )
+
+    with TestClient(app) as client:
+        response = client.post(ENDPOINT, json={"question": "客单价怎么算？"})
+
+    summary = response.json()["retrieval"]
+    assert set(summary) == {
+        "query_rewritten",
+        "query_count",
+        "candidates_considered",
+        "rerank_applied",
+        "final_count",
+    }
+    for leaked in ("keywords", "prompt", "embedding", "chunk_id", "document_id", "sk-"):
+        assert leaked not in response.text
+
+
+def test_all_recalls_failing_returns_503(monkeypatch):
+    """★ 两路召回全失败 → 503「知识库暂时不可用」。
+
+    判据是**异常类型**，不是消息文本：按文本分支的话，
+    上游改一句文案就会让映射悄悄失效。
+    """
+    patch_new_service(monkeypatch, error=KnowledgeSearchError("向量召回与关键词召回全部失败"))
+
+    with TestClient(app) as client:
+        response = client.post(ENDPOINT, json={"question": "客单价怎么算？"})
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == routes.RAG_KNOWLEDGE_UNAVAILABLE_DETAIL
+
+
+def test_a_retrieval_parameter_error_is_not_reported_as_503(monkeypatch):
+    """参数写错是程序 bug，不该伪装成「知识库不可用」。"""
+    from app.services.knowledge_retrieval import KnowledgeRetrievalError
+
+    patch_new_service(monkeypatch, error=KnowledgeRetrievalError("final_top_k 非法"))
+
+    with TestClient(app) as client:
+        response = client.post(ENDPOINT, json={"question": "客单价怎么算？"})
+
+    assert response.status_code == 500
+    assert response.json()["detail"] == routes.RAG_UNAVAILABLE_DETAIL
+
+
+def test_the_new_error_path_does_not_echo_the_question(monkeypatch):
+    marker = "zz-question-marker-zz"
+    patch_new_service(monkeypatch, error=KnowledgeSearchError("失败"))
+
+    with TestClient(app) as client:
+        response = client.post(ENDPOINT, json={"question": f"客单价 {marker} 怎么算？"})
+
+    assert response.status_code == 503
+    assert marker not in response.text
+
+
+def test_the_request_shape_is_unchanged():
+    """请求体还是 question + top_k，没有新增必填字段。"""
+    schema = app.openapi()["components"]["schemas"]["RagAnswerRequest"]
+
+    assert set(schema["required"]) == {"question"}
+    assert set(schema["properties"]) == {"question", "top_k"}
+
+
+def test_the_response_schema_allows_null_scores():
+    """响应结构只做向后兼容扩展：原有字段都在，只是允许 null。"""
+    source_schema = app.openapi()["components"]["schemas"]["RagSourceResponse"]
+    answer_schema = app.openapi()["components"]["schemas"]["RagAnswerResponse"]
+
+    assert set(source_schema["properties"]) >= {
+        "source_file",
+        "document_title",
+        "section_title",
+        "chunk_index",
+        "preview",
+        "distance",
+        "similarity",
+    }
+    assert set(source_schema["required"]) == {
+        "source_file",
+        "document_title",
+        "section_title",
+        "chunk_index",
+        "preview",
+        "distance",
+        "similarity",
+    }
+    assert "retrieval" in answer_schema["properties"]
+    assert set(answer_schema["required"]) == {"status", "answer", "sources"}

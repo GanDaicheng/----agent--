@@ -25,6 +25,9 @@
 | 模型接入 | OpenAI 兼容接口（DeepSeek / Qwen / OpenAI） | 已接入 |
 | 数据存储 | PostgreSQL 16 + pgvector | 已接入：业务样例表与知识库向量表均已建出 |
 | 数据访问 | SQLAlchemy 2.x（异步）+ asyncpg | 已接入：受控只读查询与知识库读写都在用 |
+| 数据库迁移 | Alembic | 已接入：零售数仓与知识库（含检索元数据）都由迁移建出 |
+| 向量化 / 精排模型 | 阿里云百炼：`text-embedding-v4`（1024 维）、`qwen3-rerank` | 已接入：前者走 OpenAI 兼容接口，后者走独立的 `/reranks` 接口 |
+| 检索增强 | 查询改写 + 向量/关键词混合召回 + RRF 融合 + 精排 | 已接入：知识问答走这条链路，每一步失败都能降级 |
 | 前端工作台 | Next.js 16 + React 19 + TypeScript（App Router） | 已接入：四个功能页，其中三个调用后端接口 |
 | 本地环境 | Docker Compose | 已接入：PostgreSQL + FastAPI + Next.js 三服务一键启动 |
 
@@ -37,11 +40,13 @@ backend/
     api/              # HTTP 路由层，协议定义与请求校验
     agent/            # LangGraph 编排、工具注册、提示词
     core/             # 配置、日志、异常、路径等基础设施
-    models/           # 数据库 ORM 模型（待填充）
-    services/         # 业务服务层：database_health.py 提供数据库连接自检
+    models/           # 数据库 ORM 模型（零售数仓 + 知识库）
+    services/         # 业务服务层：检索（改写/向量/关键词/RRF/精排）、入库、回答
     repositories/     # 数据访问层：database.py 管理异步引擎与连接，不含表结构
+  alembic/            # 数据库迁移（零售数仓 → 知识库 → 检索元数据）
+  scripts/            # 冒烟与运维脚本（embedding、检索、精排、元数据回填）
   Dockerfile          # 后端生产镜像：python:3.14-slim + requirements.txt + app/
-  tests/              # 后端自动化测试（健康检查接口）
+  tests/              # 后端自动化测试（不需数据库、不调真实模型）
   requirements-dev.txt# 仅开发/测试依赖，不进生产镜像
 frontend/
   src/app/            # Next.js App Router：layout.tsx、page.tsx 与样式
@@ -711,6 +716,98 @@ validate_sql → 已完成查询安全校验       repair_sql → 已尝试修�
 如果模型配置不可用，会返回 `status = error` 加一句受控说明，
 不会泄露配置内容。
 
+## 知识库问答（RAG 检索增强）
+
+智能问数那条链路回答的是「数字是多少」，这条链路回答的是「口径怎么算、规则怎么定」。
+它把业务文档切片、向量化入库，检索出最相关的几段，再让模型**只依据这几段**作答。
+
+### 完整链路
+
+```text
+用户原问题
+  → ① 查询改写 Query Rewrite        原问题 + 最多两条改写 + 关键词
+  → ② 多路召回
+        向量检索（pgvector 余弦距离）      语义相近的切片
+        关键词检索（标题/小节/关键词/别名/search_text）  术语与小节标题的精确命中
+  → ③ RRF 融合去重                  只用名次融合，最多 20 条候选
+  → ④ Reranker 精排（qwen3-rerank）  交叉编码逐条打分，取最终 top-k 条
+  → ⑤ 生成回答                      只依据最终切片作答，附来源
+  → ⑥ 前端展示                      回答 + 来源 + 可展开的检索过程
+```
+
+### 每一段为什么存在
+
+| 阶段 | 它解决什么问题 |
+| --- | --- |
+| 查询改写 | 用户问「一单平均花多少钱」，文档里写的是「客单价 = 平均每笔订单的实付金额」——口语与书面表达之间的差距靠一次改写补上。**改写只用于召回**，最终回答仍针对原问题 |
+| 向量检索 | 语义召回：问法和文档用词完全不同也能找到（「会员回购」找到「复购率」） |
+| 关键词检索 | 语义检索对精确术语不敏感：字段名、表名、小节标题、别名必须能**精确命中**。中文两个字的关键词凑不满三元组，所以这一路以精确匹配和 ILIKE 包含为主，pg_trgm 只作模糊补充 |
+| RRF 融合 | 两路的分数**量纲不同**（余弦距离 vs 命中层级分），不能相加。RRF 只用名次：被多路同时命中的切片自然排前面，只在一路排第一的排在后面 |
+| Reranker | 前四步判的都是「像不像」。交叉编码把问题和候选**拼在一起**逐条判断「这段答不答这个问题」，比双塔准得多，代价是每条候选都要过一次模型——所以只用在 20 条候选上，不是全库 |
+| 生成回答 | 只复述最终切片里写过的内容；资料不足时用固定文案说明，不编 |
+
+### 降级：每一层都自己兜底
+
+这条链路的每一步都是「增益」而不是「必需」，所以任何一步失败都不会让问答不可用：
+
+| 失败的东西 | 表现 | 结果 |
+| --- | --- | --- |
+| 改写模型 | 超时 / 限流 / 输出畸形 | 退回「只用原问题」，链路继续 |
+| 向量召回 | embedding 接口不可用 | 保留关键词结果 |
+| 关键词召回 | SQL 出错 | 保留向量结果 |
+| 两路都失败 | 检索基础设施不可用 | 返回 **503**（而不是假装「没有相关资料」） |
+| Reranker | 超时 / 429 / 5xx / 响应畸形 | 退回 RRF 顺序，来源照常返回 |
+| 配置缺失 | 例如没填精排 Key | **直接报配置错误**——部署问题必须当场暴露，不能和「服务挂了」混成同一个现象 |
+
+关掉改写（`RAG_QUERY_REWRITE_ENABLED=false`）或精排（`RAG_RERANK_ENABLED=false`）都能正常问答，
+只是少一层增益；**关掉精排时不需要填精排的 Key**。
+
+### 可观测：前端能展开看检索过程
+
+来源列表会标出每条是**向量召回 / 关键词召回 / 混合召回**，以及是否**已精排**；
+答案下方有一个默认收起的「查看检索过程」，展开后是五个阶段的实际统计：
+
+```text
+查询扩展 → 检索表达 → 初选候选 → 相关性精排 → 最终采用
+已扩展      3 条表达    20 条候选    已执行       5 条资料
+```
+
+页面只渲染后端真正给出的数字：某一步没有数据就不显示，也不编。
+来源里的分数（向量相似度、融合分、关键词分、精排分）都标注为「只用于本次请求内的排序」——
+它们**不是**答案置信度：量纲不同、只在同一次请求内可比、也没有做过校准。
+
+### 相关路径与命令
+
+| 类型 | 位置 |
+| --- | --- |
+| 页面 | `/applications/knowledge-qa`（知识问答）、`/data/sources`（数据采集：上传与文档列表） |
+| 接口 | `POST /api/v1/rag/answer`、`GET /api/v1/rag/documents`、`POST /api/v1/rag/documents` |
+
+上传支持 `md` / `txt` / `docx` / `pdf`。PDF 的标题层级靠字号启发式推断，
+**扫描件（图片型 PDF）没有文字层，暂不支持**，需要后续接 OCR。
+
+```powershell
+# 后端全量测试（不需要数据库、不调真实模型）
+.\.venv\Scripts\python.exe -m pytest backend -q
+
+# 前端检查
+cd frontend; npm run lint; npx tsc --noEmit; npm run build; cd ..
+
+# 冒烟脚本（按需执行，部分会花真实调用）
+python backend/scripts/smoke_embedding.py                          # embedding 配置是否调得通
+python backend/scripts/smoke_knowledge_search.py                   # 向量召回质量，人工核对
+python backend/scripts/backfill_knowledge_metadata.py --dry-run     # 检索元数据回填，不花钱
+python backend/scripts/smoke_reranker.py                           # 精排接口是否调得通
+```
+
+### 已知局限
+
+- 当前只有 6 份文档、48 条切片，向量检索用**精确顺序扫描**（不建近似索引）——这个量级下它更快也更准，等切片上千再补索引，检索代码不用改。
+- 查询改写与精排各增加一次外部模型调用，意味着更多时延与费用；两者都可以用开关关掉。
+- 检索分数只反映「本次请求内的排序」，不是答案正确率。
+- PDF 标题识别是启发式的；扫描件需要 OCR。
+- 知识问答与智能问数目前是两条独立链路，前者不走 Agent 图。
+
 ## 前端交互页面
 
 三个页面会真实调用后端：
@@ -789,7 +886,8 @@ http://127.0.0.1:3000
 ```text
 当前使用本地零售样例数据，不是企业真实生产数据
 每次提问都会调用配置的模型服务，请不要输入敏感信息
-尚未接入 RAG 知识库、用户权限与会话记忆
+口径与规则类问题会转交给知识库链路作答（见「知识库问答（RAG 检索增强）」）
+尚未接入用户权限与会话记忆
 ```
 
 页面首次打开**不会**发起任何请求；只有点击「开始分析」或按
@@ -862,8 +960,26 @@ npm run start    # 以生产模式启动，需先 build
 - embedding（RAG 用）与对话模型**分开配置**，走 `EMBEDDING_*` 五个变量，默认指向
   阿里云百炼的 OpenAI 兼容模式（`text-embedding-v4`）。`EMBEDDING_DIMENSION`
   必须同时与 `EMBEDDING_MODEL` 的实际输出维度和 pgvector 建表时的 `vector(N)` 一致，
-  改任一处都要同步改另外两处，否则会在入库或建索引时才报错。
-  配置是否调得通，用 `python backend/scripts/smoke_embedding.py` 验证。
+  改任一处都要同步改另外三处（还有模型里的 `KNOWLEDGE_EMBEDDING_DIMENSIONS`），
+  否则会在入库或建索引时才报错。配置是否调得通，用
+  `python backend/scripts/smoke_embedding.py` 验证。
+- 检索增强另有七个变量（`.env.example` 里有完整注释）：
+
+  | 变量 | 作用 | 缺省 |
+  | --- | --- | --- |
+  | `RAG_QUERY_REWRITE_ENABLED` | 是否在检索前做查询改写 | `true` |
+  | `RAG_MAX_REWRITTEN_QUERIES` | 最多生成几条改写（合法范围 0~2） | `2` |
+  | `RAG_RERANK_ENABLED` | 是否做精排 | `true` |
+  | `RAG_RETRIEVAL_CANDIDATE_LIMIT` | 精排接收的候选上限（1~20） | `20` |
+  | `RAG_FINAL_TOP_K` | 最终交给回答模型的条数 | `5` |
+  | `RERANK_PROVIDER` / `RERANK_MODEL` | 精排供应商与模型 | `dashscope` / `qwen3-rerank` |
+  | `RERANK_API_KEY` / `RERANK_BASE_URL` / `RERANK_TIMEOUT_SECONDS` | 精排的密钥、业务空间地址与超时 | 空 / 空 / `10` |
+
+  **精排默认开启，所以要么把 `RERANK_*` 配全，要么显式设 `RAG_RERANK_ENABLED=false`。**
+  只关掉开关时不校验这几个供应商字段——「想临时关掉」不该因为少一个 Key 而做不到。
+  `RERANK_BASE_URL` 只填到 `/compatible-api/v1` 为止，**不要带 `/reranks` 结尾**（代码会自己拼）。
+  这些变量在 `docker-compose.yml` 里逐条透传给 backend 容器：容器内没有 `.env`
+  （它在 `.dockerignore` 里），配置只能靠那里注入。
 
 ## 开发路线
 
@@ -878,6 +994,16 @@ npm run start    # 以生产模式启动，需先 build
 - [x] 阶段五·补：智能问数 Agent 接入真实数据（默认执行器改为数据中台服务，mock 保留供测试）
 - [x] 阶段五·补：自然语言智能问数接口（POST `/api/v1/agent/data-query`，await 生产 Agent 图）
 - [x] 阶段九：前端问数工作台（`/applications/data-query`：输入、加载、取消、结论、执行过程、明细表、SVG/CSS 图表）
+- [x] RAG-13.1：通用查询改写（原问题保留 + 最多两条改写 + 关键词，模型失败退回原问题）
+- [x] RAG-13.2：知识切片检索元数据表结构（keywords / aliases / search_text + pg_trgm + GIN 索引）
+- [x] RAG-13.3：动态生成检索元数据（入库时提取，存量切片幂等回填）
+- [x] RAG-13.4：混合检索与 RRF（向量 + 关键词两路召回，按 chunk_id 去重融合，最多 20 条候选）
+- [x] RAG-13.5：可插拔精排（百炼 `qwen3-rerank`，供应商故障退回 RRF 顺序）
+- [x] RAG-13.6：接入正式知识问答链路（改写 → 混合召回 → 精排 → 回答，含检索摘要）
+- [x] RAG-13.7：前端展示检索过程与召回方式
 - [ ] 阶段六：数据目录与指标语义层
 - [ ] 阶段七：安全 SQL 生成与查询执行
 - [ ] 阶段八：运行记录与可观测性
+
+后续可做：把知识问答与智能问数合成一条链路（同一个问题既能查数也能查口径）、
+知识库文档权限、会话记忆，以及切片规模上千后的向量索引与检索质量评测。

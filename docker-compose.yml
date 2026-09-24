@@ -72,6 +72,25 @@ services:
       EMBEDDING_DIMENSION: ${EMBEDDING_DIMENSION:-1024}
       EMBEDDING_API_KEY: ${EMBEDDING_API_KEY:-}
       EMBEDDING_BASE_URL: ${EMBEDDING_BASE_URL:-https://dashscope.aliyuncs.com/compatible-mode/v1}
+      # RAG 检索增强：查询改写 + 混合检索 + 精排，同样是容器里拿不到的配置。
+      # **这几行也不能省**，漏掉的后果比 embedding 那几行更严重：
+      # 精排默认是开着的（RAG_RERANK_ENABLED 默认 true），而容器里没有 .env，
+      # RERANK_API_KEY 取到空值后 require_rerank_settings() 会抛配置错误，
+      # 知识问答接口会直接 500，而不是降级。
+      # 两种正确配法：把下面几项填全（真实值写在 .env），
+      # 或者显式设 RAG_RERANK_ENABLED=false 关掉精排——关掉时不需要 Key。
+      RAG_QUERY_REWRITE_ENABLED: ${RAG_QUERY_REWRITE_ENABLED:-true}
+      RAG_MAX_REWRITTEN_QUERIES: ${RAG_MAX_REWRITTEN_QUERIES:-2}
+      RAG_RERANK_ENABLED: ${RAG_RERANK_ENABLED:-true}
+      RAG_RETRIEVAL_CANDIDATE_LIMIT: ${RAG_RETRIEVAL_CANDIDATE_LIMIT:-20}
+      RAG_FINAL_TOP_K: ${RAG_FINAL_TOP_K:-5}
+      RERANK_PROVIDER: ${RERANK_PROVIDER:-dashscope}
+      RERANK_MODEL: ${RERANK_MODEL:-qwen3-rerank}
+      # 密钥与业务空间地址默认留空：真实值只写在 .env 里，本文件只做透传。
+      # 地址里带着租户标识，所以这里连示例值都不给。
+      RERANK_API_KEY: ${RERANK_API_KEY:-}
+      RERANK_BASE_URL: ${RERANK_BASE_URL:-}
+      RERANK_TIMEOUT_SECONDS: ${RERANK_TIMEOUT_SECONDS:-10}
       # 关键：容器内的数据库主机名必须是服务名 postgres。
       # 用 DATABASE_URL_DOCKER（主机名 postgres），不能用 DATABASE_URL
       # （主机名 localhost）——容器里的 localhost 指的是容器自己，不是宿主机。

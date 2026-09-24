@@ -1,11 +1,17 @@
 """知识文档入库的测试。
 
-**本文件不连接 PostgreSQL，也不调用真实 embedding 接口。**
-两个外部依赖都被替身换掉：
+**本文件不连接 PostgreSQL，也不调用真实 embedding / 真实模型。**
+三个外部依赖都被替身换掉：
 - `FakeStore` 顶替 `PostgresKnowledgeStore`——幂等逻辑是纯业务规则，
   用内存里的字典就能验证，不必为它起一个真库；
 - `FakeEmbedder` 顶替 `embed_texts`——它记录每次收到的文本，
-  于是「第二次运行到底有没有再调 embedding」这件事可以被直接断言。
+  于是「第二次运行到底有没有再调 embedding」这件事可以被直接断言；
+- `FakeMetadataExtractor` 顶替 `extract_search_metadata`——同理，
+  它记录每个被问到的切片，于是「skip 到底有没有调模型」也能被直接断言。
+
+**注入替身不是可选项**：两个入口的 metadata_extractor 默认指向生产实现，
+不注入就会真的去调模型、真的花配额。所以统一在 run_ingest / ingest_content
+这两个包装函数里注入假的，单个测试要断言调用情况时再自己传一个进来。
 
 另有一组测试用 `RecordingConnection` 接住 `PostgresKnowledgeStore` 发出的 SQL，
 断言它只碰 knowledge_documents / knowledge_chunks——这是「不写业务表」最硬的证据，
@@ -21,6 +27,7 @@ import pathlib
 import textwrap
 
 import pytest
+from sqlalchemy.exc import OperationalError
 
 from app.core.config import EmbeddingSettings
 from app.services import knowledge_ingestion
@@ -40,6 +47,11 @@ from app.services.knowledge_ingestion import (
     ingest_knowledge_document_from_content,
     pending_embedding_texts,
     plan_document,
+)
+from app.services.knowledge_metadata import (
+    KnowledgeSearchMetadata,
+    build_base_search_text,
+    build_enriched_search_text,
 )
 
 BACKEND_DIR = pathlib.Path(__file__).resolve().parents[1]
@@ -89,6 +101,53 @@ class FakeEmbedder:
         return (
             [[0.25] * self.dimension for _ in batch],
             make_embedding_settings(dimension=self.dimension),
+        )
+
+
+class FakeMetadataExtractor:
+    """记录每个被问到的切片，返回可辨识的元数据。
+
+    keywords / aliases 里带上 chunk_index，于是「哪几个切片被提取过」
+    和「写进库的是哪一条」都能直接断言，不必靠数量猜。
+    """
+
+    def __init__(self, *, error: Exception | None = None, succeeded: bool = True) -> None:
+        self.chunks: list = []
+        self.error = error
+        self.succeeded = succeeded
+
+    @property
+    def call_count(self) -> int:
+        return len(self.chunks)
+
+    def indexes_for(self, source_file: str) -> list[int]:
+        return [chunk.chunk_index for chunk in self.chunks if chunk.source_file == source_file]
+
+    async def __call__(self, chunk):
+        self.chunks.append(chunk)
+
+        if self.error is not None:
+            raise self.error
+
+        if not self.succeeded:
+            return KnowledgeSearchMetadata(
+                keywords=(),
+                aliases=(),
+                search_text=build_base_search_text(
+                    chunk.document_title, chunk.section_title, chunk.content
+                ),
+                extraction_succeeded=False,
+            )
+
+        keywords = (f"关键词{chunk.chunk_index}",)
+        aliases = (f"别名{chunk.chunk_index}",)
+        return KnowledgeSearchMetadata(
+            keywords=keywords,
+            aliases=aliases,
+            search_text=build_enriched_search_text(
+                chunk.document_title, chunk.section_title, chunk.content, keywords, aliases
+            ),
+            extraction_succeeded=True,
         )
 
 
@@ -162,11 +221,13 @@ def docs(tmp_path) -> pathlib.Path:
     return tmp_path
 
 
-async def run_ingest(directory, store, embedder, **kwargs):
+async def run_ingest(directory, store, embedder, metadata_extractor=None, **kwargs):
+    """默认注入假的元数据提取器——不注入就会真的去调模型。"""
     return await ingest_knowledge(
         directory,
         store=store,
         embedder=embedder,
+        metadata_extractor=metadata_extractor or FakeMetadataExtractor(),
         embedding_model=MODEL,
         **kwargs,
     )
@@ -503,14 +564,34 @@ class _EmptyResult:
 
 
 class RecordingConnection:
-    """不连库，只把 PostgresKnowledgeStore 发出的语句记下来。"""
+    """不连库，只把 PostgresKnowledgeStore 发出的语句和参数记下来。
+
+    参数也要记：keywords / aliases 是不是以 JSONB 能接受的 list 形状传下去的，
+    只能从参数里看，SQL 文本上看不出来。
+    """
 
     def __init__(self) -> None:
         self.statements: list[str] = []
+        self.parameters: list = []
 
     async def execute(self, statement, parameters=None):
         self.statements.append(str(statement))
+        self.parameters.append(parameters)
         return _EmptyResult()
+
+    def inserted_chunk_rows(self) -> list[dict]:
+        """取出送往 knowledge_chunks 的那次 INSERT 的每一行参数。"""
+        for statement, parameters in zip(self.statements, self.parameters):
+            if "INSERT INTO knowledge_chunks" in statement:
+                return list(parameters or [])
+        raise AssertionError("这次执行里没有向 knowledge_chunks 插入数据")
+
+    def updated_chunk_statements(self) -> list[str]:
+        return [
+            statement
+            for statement in self.statements
+            if statement.upper().lstrip().startswith("UPDATE KNOWLEDGE_CHUNKS")
+        ]
 
 
 def _tables_touched(statements: list[str]) -> set[str]:
@@ -536,8 +617,22 @@ def test_load_existing_only_reads_knowledge_tables():
     assert all("SELECT" in statement.upper() for statement in connection.statements)
 
 
+def make_chunk_record(chunk, *, keywords=("关键词",), aliases=("别名",), search_text="检索文本"):
+    """构造一条待写入的记录。元数据没有默认空值：这里显式给，测试才看得见。"""
+    from app.services.knowledge_ingestion import ChunkRecord
+
+    return ChunkRecord(
+        chunk=chunk,
+        embedding=[0.1] * DIMENSION,
+        embedding_model=MODEL,
+        keywords=keywords,
+        aliases=aliases,
+        search_text=search_text,
+    )
+
+
 def test_apply_only_writes_knowledge_tables(tmp_path):
-    from app.services.knowledge_ingestion import ChunkRecord, DocumentWrite
+    from app.services.knowledge_ingestion import DocumentWrite
 
     chunks = group_chunks_by_source_file(load_knowledge_chunks(REAL_DOCS_DIR))[
         "retail_metrics.md"
@@ -548,10 +643,7 @@ def test_apply_only_writes_knowledge_tables(tmp_path):
         content_hash="hash",
         is_update=False,
         document_id=None,
-        records=tuple(
-            ChunkRecord(chunk=c, embedding=[0.1] * DIMENSION, embedding_model=MODEL)
-            for c in chunks[:2]
-        ),
+        records=tuple(make_chunk_record(chunk) for chunk in chunks[:2]),
     )
 
     connection = RecordingConnection()
@@ -569,8 +661,47 @@ def test_apply_only_writes_knowledge_tables(tmp_path):
     )
 
 
+def test_apply_writes_the_metadata_columns_as_lists():
+    """keywords / aliases 必须是以 list 形状传下去的 JSONB 值。
+
+    传 tuple 也能被 json 序列化，但 list 是 JSON 数组最直白的 Python 对应物，
+    也让「这一列是数组」这件事在参数里一眼可见。
+    """
+    from app.services.knowledge_ingestion import DocumentWrite
+
+    chunks = group_chunks_by_source_file(load_knowledge_chunks(REAL_DOCS_DIR))[
+        "retail_metrics.md"
+    ]
+    write = DocumentWrite(
+        source_file="retail_metrics.md",
+        document_title=chunks[0].document_title,
+        content_hash="hash",
+        is_update=False,
+        document_id=None,
+        records=(
+            make_chunk_record(
+                chunks[0],
+                keywords=("甲", "乙"),
+                aliases=("丙",),
+                search_text="文档：甲\n小节：乙\n关键词：甲、乙\n同义表达：丙\n\n正文：\n内容",
+            ),
+        ),
+    )
+
+    connection = RecordingConnection()
+    asyncio.run(PostgresKnowledgeStore(connection).apply([write]))
+
+    row = connection.inserted_chunk_rows()[0]
+    assert isinstance(row["keywords"], list)
+    assert isinstance(row["aliases"], list)
+    assert row["keywords"] == ["甲", "乙"]
+    assert row["aliases"] == ["丙"]
+    assert row["search_text"].startswith("文档：甲")
+    assert "正文：" in row["search_text"]
+
+
 def test_apply_for_update_deletes_chunks_before_reinserting():
-    from app.services.knowledge_ingestion import ChunkRecord, DocumentWrite
+    from app.services.knowledge_ingestion import DocumentWrite
 
     chunks = group_chunks_by_source_file(load_knowledge_chunks(REAL_DOCS_DIR))[
         "retail_metrics.md"
@@ -581,10 +712,7 @@ def test_apply_for_update_deletes_chunks_before_reinserting():
         content_hash="hash",
         is_update=True,
         document_id=7,
-        records=tuple(
-            ChunkRecord(chunk=c, embedding=[0.1] * DIMENSION, embedding_model=MODEL)
-            for c in chunks[:1]
-        ),
+        records=(make_chunk_record(chunks[0]),),
     )
 
     connection = RecordingConnection()
@@ -596,6 +724,36 @@ def test_apply_for_update_deletes_chunks_before_reinserting():
     assert "INSERT" in joined
     # 删除必须发生在插入之前，否则新切片会被自己刚插的内容顶掉
     assert joined.index("DELETE") < joined.index("INSERT")
+
+
+def test_store_never_swallows_write_errors():
+    """写入报错必须往上抛，交给 engine.begin() 去整体回滚。
+
+    吞掉错误的后果比失败更糟：事务会带着半截数据提交，
+    留下「文档行更新了、切片还是旧的」这种状态。
+    """
+
+    class ExplodingConnection(RecordingConnection):
+        async def execute(self, statement, parameters=None):
+            await super().execute(statement, parameters)
+            raise OperationalError("INSERT", {}, Exception("boom"))
+
+    from app.services.knowledge_ingestion import DocumentWrite
+
+    chunks = group_chunks_by_source_file(load_knowledge_chunks(REAL_DOCS_DIR))[
+        "retail_metrics.md"
+    ]
+    write = DocumentWrite(
+        source_file="retail_metrics.md",
+        document_title=chunks[0].document_title,
+        content_hash="hash",
+        is_update=False,
+        document_id=None,
+        records=(make_chunk_record(chunks[0]),),
+    )
+
+    with pytest.raises(OperationalError):
+        asyncio.run(PostgresKnowledgeStore(ExplodingConnection()).apply([write]))
 
 
 # --------------------------------------------------------------------------
@@ -731,6 +889,7 @@ async def ingest_content(
     file_type: str = "md",
     store,
     embedder,
+    metadata_extractor=None,
     **kwargs,
 ):
     return await ingest_knowledge_document_from_content(
@@ -739,6 +898,7 @@ async def ingest_content(
         file_type=file_type,
         store=store,
         embedder=embedder,
+        metadata_extractor=metadata_extractor or FakeMetadataExtractor(),
         embedding_model=MODEL,
         **kwargs,
     )
@@ -1117,5 +1277,272 @@ def test_directory_entry_point_still_has_its_original_signature():
     assert "directory" in parameters
     assert all(
         parameters[name].kind is inspect.Parameter.KEYWORD_ONLY
-        for name in ("store", "embedder", "embedding_model", "batch_size", "dry_run")
+        for name in (
+            "store",
+            "embedder",
+            "embedding_model",
+            "batch_size",
+            "dry_run",
+        )
     )
+
+
+# ==========================================================================
+# 检索元数据接入入库流程
+#
+# 这一节盯三件事：
+# 1. 什么时候调模型（insert / update 要调，skip 一次都不调）；
+# 2. 调出来的东西有没有原样写进 ChunkRecord 和数据库；
+# 3. 元数据有没有悄悄影响 hash 和 embedding —— 它绝对不能。
+# ==========================================================================
+
+
+def test_insert_extracts_metadata_for_every_chunk(docs):
+    store, embedder = FakeStore(), FakeEmbedder()
+    extractor = FakeMetadataExtractor()
+
+    asyncio.run(run_ingest(docs, store, embedder, metadata_extractor=extractor))
+
+    # a.md 两片 + b.md 一片
+    assert extractor.call_count == 3
+    assert sorted(extractor.indexes_for("a.md")) == [0, 1]
+    assert extractor.indexes_for("b.md") == [0]
+
+
+def test_update_extracts_metadata_for_every_rewritten_chunk(docs):
+    """★ update 是整体删了重插，所以**每一片**都要重新提取元数据，
+    即使其中一部分的向量可以直接复用。
+
+    只给「需要重算向量的切片」提取元数据，会让复用了向量的那几片
+    写着上一轮的旧元数据（甚至没有元数据）——而它们的正文这次也重新写了。
+    """
+    store = FakeStore()
+    asyncio.run(run_ingest(docs, store, FakeEmbedder()))
+
+    write_doc(docs, "a.md", """
+        # 指标口径
+
+        ## 1. 销售额
+
+        销售额取 `orders.net_amount`。
+
+        ## 2. 订单数
+
+        订单数改用 `COUNT(DISTINCT orders.order_no)`，并明确去重口径。
+    """)
+
+    extractor = FakeMetadataExtractor()
+    summary = asyncio.run(
+        run_ingest(docs, store, FakeEmbedder(), metadata_extractor=extractor)
+    )
+
+    assert summary.updated_documents == 1
+    assert summary.embedded_chunks == 1  # 只有「订单数」那一片要重算向量
+    assert extractor.call_count == 2  # 但两片都要重新提取元数据
+    assert sorted(extractor.indexes_for("a.md")) == [0, 1]
+
+
+def test_skip_calls_neither_embedding_nor_metadata(docs):
+    """★ skip 是最值钱的那条路径：一次 API 都不该调。"""
+    store = FakeStore()
+    asyncio.run(run_ingest(docs, store, FakeEmbedder()))
+
+    embedder = FakeEmbedder()
+    extractor = FakeMetadataExtractor()
+    summary = asyncio.run(
+        run_ingest(docs, store, embedder, metadata_extractor=extractor)
+    )
+
+    assert summary.skipped_documents == 2
+    assert summary.inserted_chunks == 0
+    assert embedder.calls == []
+    assert extractor.call_count == 0
+
+
+def test_dry_run_calls_no_metadata_model(docs):
+    store, embedder = FakeStore(), FakeEmbedder()
+    extractor = FakeMetadataExtractor()
+
+    summary = asyncio.run(
+        run_ingest(docs, store, embedder, metadata_extractor=extractor, dry_run=True)
+    )
+
+    assert summary.status == "dry-run"
+    assert store.documents == {}
+    assert extractor.call_count == 0
+
+
+def test_metadata_lands_in_the_chunk_record(docs):
+    store = RecordingStore()
+
+    asyncio.run(
+        run_ingest(docs, store, FakeEmbedder(), metadata_extractor=FakeMetadataExtractor())
+    )
+
+    write = next(w for w in store.writes if w.source_file == "a.md")
+    first = write.records[0]
+    assert first.keywords == ("关键词0",)
+    assert first.aliases == ("别名0",)
+    assert "关键词：关键词0" in first.search_text
+    assert "同义表达：别名0" in first.search_text
+    assert "正文：" in first.search_text
+    assert first.chunk.content in first.search_text
+
+
+def test_metadata_does_not_change_the_embedding_input(docs):
+    """★ 送进 embedding 的文本不受元数据影响，一个字符都不该变。"""
+    store, embedder = FakeStore(), FakeEmbedder()
+
+    asyncio.run(
+        run_ingest(docs, store, embedder, metadata_extractor=FakeMetadataExtractor())
+    )
+
+    chunks = group_chunks_by_source_file(load_knowledge_chunks(docs))
+    expected = [chunk.content_for_embedding for items in chunks.values() for chunk in items]
+    sent = [text for batch in embedder.calls for text in batch]
+
+    assert sent == expected
+    # 关键词没有混进送去算向量的文本
+    assert not any("关键词" in text for text in sent)
+
+
+def test_metadata_does_not_change_any_hash(docs):
+    """★ 元数据不参与 content_hash，也不参与整篇 hash。"""
+    store = RecordingStore()
+    extractor = FakeMetadataExtractor()
+
+    asyncio.run(run_ingest(docs, store, FakeEmbedder(), metadata_extractor=extractor))
+
+    chunks = group_chunks_by_source_file(load_knowledge_chunks(docs))["a.md"]
+    write = next(w for w in store.writes if w.source_file == "a.md")
+
+    assert [record.chunk.content_hash for record in write.records] == [
+        chunk.content_hash for chunk in chunks
+    ]
+    assert write.content_hash == document_content_hash(chunks)
+
+
+def test_different_metadata_between_runs_is_still_a_skip(docs):
+    """★ 同内容、不同元数据 → 仍然是 skip。
+
+    这是「元数据不参与 hash」最实际的证据：模型每次输出都略有不同，
+    一旦把元数据算进 hash，同一份文档就会在 skip 和 update 之间反复横跳，
+    每次都重写整篇切片、重算整篇向量——内容一个字都没改。
+    """
+    store = FakeStore()
+    asyncio.run(
+        run_ingest(docs, store, FakeEmbedder(), metadata_extractor=FakeMetadataExtractor())
+    )
+
+    class OtherMetadataExtractor(FakeMetadataExtractor):
+        async def __call__(self, chunk):
+            self.chunks.append(chunk)
+            keywords = ("完全不同的关键词",)
+            return KnowledgeSearchMetadata(
+                keywords=keywords,
+                aliases=(),
+                search_text=build_enriched_search_text(
+                    chunk.document_title,
+                    chunk.section_title,
+                    chunk.content,
+                    keywords,
+                    (),
+                ),
+                extraction_succeeded=True,
+            )
+
+    extractor = OtherMetadataExtractor()
+    summary = asyncio.run(
+        run_ingest(docs, store, FakeEmbedder(), metadata_extractor=extractor)
+    )
+
+    assert summary.skipped_documents == 2
+    assert summary.updated_documents == 0
+    assert extractor.call_count == 0
+
+
+def test_degraded_extraction_still_completes_the_ingestion(docs):
+    """★ 提取降级（失败）不阻塞入库：切片照写，只是没有关键词。"""
+    store, embedder = RecordingStore(), FakeEmbedder()
+    extractor = FakeMetadataExtractor(succeeded=False)
+
+    summary = asyncio.run(run_ingest(docs, store, embedder, metadata_extractor=extractor))
+
+    assert summary.inserted_chunks == 3
+    assert extractor.call_count == 3
+
+    record = store.writes[0].records[0]
+    assert record.keywords == ()
+    assert record.aliases == ()
+    assert record.search_text == build_base_search_text(
+        record.chunk.document_title, record.chunk.section_title, record.chunk.content
+    )
+    # 降级结果里没有那两个标记，回填脚本据此知道这条还没处理过
+    assert "关键词：" not in record.search_text
+
+
+def test_a_raising_extractor_does_not_block_the_ingestion(docs):
+    """替身直接抛异常也要被兜住。
+
+    extract_search_metadata 自己会对模型失败降级，但输入校验失败
+    或者调用方换了别的提取器时，异常会直接冒上来。检索元数据
+    不该让一次文档上传失败，所以入库侧再包一层。
+    """
+    store, embedder = RecordingStore(), FakeEmbedder()
+    extractor = FakeMetadataExtractor(error=RuntimeError("boom"))
+
+    summary = asyncio.run(run_ingest(docs, store, embedder, metadata_extractor=extractor))
+
+    assert summary.inserted_chunks == 3
+    assert extractor.call_count == 3
+    record = store.writes[0].records[0]
+    assert record.keywords == ()
+    assert record.search_text == build_base_search_text(
+        record.chunk.document_title, record.chunk.section_title, record.chunk.content
+    )
+
+
+def test_metadata_failure_log_never_contains_document_text(caplog, docs):
+    """日志只记异常类名：正文和密钥都属于不该进日志的东西。"""
+    import logging
+
+    store, embedder = RecordingStore(), FakeEmbedder()
+    extractor = FakeMetadataExtractor(
+        error=RuntimeError("api_key=sk-canary-ingest-leak-0123456789")
+    )
+
+    with caplog.at_level(logging.WARNING):
+        asyncio.run(run_ingest(docs, store, embedder, metadata_extractor=extractor))
+
+    assert "RuntimeError" in caplog.text
+    assert "sk-canary-ingest-leak" not in caplog.text
+    assert "sk-" not in caplog.text
+    # 正文片段不进日志
+    assert "销售额取" not in caplog.text
+
+
+def test_write_failure_propagates_and_leaves_nothing_behind(docs):
+    """★ 数据库写入失败时异常必须传出去，交给事务整体回滚。"""
+
+    class FailingStore(FakeStore):
+        async def apply(self, writes):
+            raise OperationalError("INSERT", {}, Exception("boom"))
+
+    store = FailingStore()
+
+    with pytest.raises(OperationalError):
+        asyncio.run(
+            run_ingest(docs, store, FakeEmbedder(), metadata_extractor=FakeMetadataExtractor())
+        )
+
+    assert store.documents == {}
+
+
+def test_metadata_extractor_is_injectable_on_both_entry_points():
+    """两个入口都必须能注入提取器，否则测试只能去调真实模型。"""
+    import inspect
+
+    for function in (ingest_knowledge, ingest_knowledge_document_from_content):
+        parameters = inspect.signature(function).parameters
+        assert "metadata_extractor" in parameters, function.__name__
+        assert parameters["metadata_extractor"].kind is inspect.Parameter.KEYWORD_ONLY
