@@ -1,0 +1,20 @@
+[
+  {
+    "id": "trend-drilldown",
+    "category": "趋势下钻",
+    "question": "先分析华东销售趋势，再下钻到品类贡献并生成报告。",
+    "expected_tools": ["analyze_business_data", "save_analysis_report"]
+  },
+  {
+    "id": "knowledge-enhanced",
+    "category": "知识增强",
+    "question": "结合促销规则解释华东销售下降原因。",
+    "expected_tools": ["analyze_business_data", "search_business_knowledge"]
+  },
+  {
+    "id": "knowledge-degraded",
+    "category": "降级场景",
+    "question": "知识库不可用时仍返回销售结论。",
+    "expected_status": "degraded"
+  }
+]

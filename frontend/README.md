@@ -35,6 +35,7 @@ npm run dev
 | `/ai/agents` | Agent 中心说明页 | 否 |
 | `/applications/data-query` | **智能问数**：中文提问，查业务数据 | 是 |
 | `/applications/knowledge-qa` | **知识问答**：问业务口径，检索知识文档 | 是 |
+| `/applications/business-analysis` | **经营分析**：多轮 Agent Loop、工具调用、历史恢复 | 是 |
 | `/architecture` | **技术栈与架构**：技术栈、系统结构、数据流转 | 否 |
 
 两个说明页（`/ai/knowledge`、`/ai/agents`）由同一个模板
@@ -122,13 +123,14 @@ legacy-static/
 
 ## 当前状态与数据边界
 
-三个页面会真实调用后端，其余页面是静态配置驱动的说明页。
+四个页面会真实调用后端，其余页面是静态配置驱动的说明页。
 
 | 页面 | 接口 | 说明 |
 | --- | --- | --- |
 | `/data/sources` | `POST` / `GET /api/v1/rag/documents` | 上传会真实调用 embedding 并写库 |
 | `/applications/knowledge-qa` | `POST /api/v1/rag/answer` | 每次提问花一次 embedding + 一次模型调用 |
 | `/applications/data-query` | `POST /api/v1/agent/data-query` | 每次提问花一次模型调用并读数据库 |
+| `/applications/business-analysis` | `POST /api/v1/agent/business-analysis/runs`（SSE） | 多步调用问数、知识检索和报告工具 |
 
 共同约定（改造时请保留）：
 

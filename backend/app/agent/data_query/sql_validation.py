@@ -19,6 +19,8 @@ AST 则不同：sqlglot 已经按 PostgreSQL 语法把语句解析成了结构�
 权限、行级过滤、资源限制属于后续 run_safe_query 的职责。
 """
 
+import re
+
 import sqlglot
 from sqlglot import exp
 from sqlglot.errors import ParseError
@@ -214,7 +216,12 @@ def validate_sql_draft(
 
     # 13. LIMIT
     if limit_node is None:
-        issues.append(f"查询必须包含不超过 {MAX_SQL_LIMIT} 的 LIMIT。")
+        # sqlglot 30 no longer preserves PostgreSQL's `LIMIT ALL` as a Limit
+        # node. Keep the public validation contract stable across parser versions.
+        if re.search(r"\blimit\s+all\b", sql, flags=re.IGNORECASE):
+            issues.append("LIMIT 必须是正整数。")
+        else:
+            issues.append(f"查询必须包含不超过 {MAX_SQL_LIMIT} 的 LIMIT。")
     else:
         value = limit_node.expression
         if not isinstance(value, exp.Literal) or not value.is_int:
