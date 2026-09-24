@@ -9,6 +9,12 @@ from app.agent.business_analysis.schemas import ToolResult
 from app.services.knowledge_retrieval import retrieve_knowledge
 
 
+async def _save_analysis_report(*, run_id: str, report: dict[str, Any]) -> str:
+    """Injected by the runner once a transaction is available."""
+
+    raise RuntimeError("报告保存服务尚未绑定。")
+
+
 def _public_query_result(value: Any) -> dict[str, Any] | None:
     if not isinstance(value, dict):
         return None
@@ -141,8 +147,24 @@ async def get_metric_definition(metric: str) -> dict[str, Any]:
     return await _search_business_knowledge(f"指标定义：{metric.strip()}", top_k=4)
 
 
+@tool
+async def save_analysis_report(run_id: str, report: dict[str, Any]) -> dict[str, Any]:
+    """保存结构化经营分析报告，返回可恢复的 report_id。"""
+
+    try:
+        report_id = await _save_analysis_report(run_id=run_id, report=report)
+    except Exception:  # noqa: BLE001 - tool boundary returns a fixed error
+        return ToolResult(status="error", summary="经营分析报告暂时无法保存。").model_dump()
+    return ToolResult(
+        status="ok",
+        summary="经营分析报告已保存。",
+        data={"report_id": report_id},
+    ).model_dump()
+
+
 BUSINESS_ANALYSIS_TOOLS = (
     analyze_business_data,
     search_business_knowledge,
     get_metric_definition,
+    save_analysis_report,
 )

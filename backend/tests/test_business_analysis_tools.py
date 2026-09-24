@@ -111,3 +111,24 @@ async def test_get_metric_definition_uses_knowledge_search(monkeypatch):
 
     assert result["status"] == "ok"
     assert result["summary"] == "复购率定义"
+
+
+@pytest.mark.anyio
+async def test_save_analysis_report_tool_returns_report_id(monkeypatch):
+    from app.agent.business_analysis.tools import save_analysis_report
+
+    async def fake_save(*, run_id, report):
+        assert run_id == "run-1"
+        assert report["summary"] == "销售额下降"
+        return "report-1"
+
+    monkeypatch.setattr(
+        "app.agent.business_analysis.tools._save_analysis_report",
+        fake_save,
+    )
+    result = await save_analysis_report.ainvoke(
+        {"run_id": "run-1", "report": {"summary": "销售额下降"}}
+    )
+
+    assert result["status"] == "ok"
+    assert result["data"]["report_id"] == "report-1"
