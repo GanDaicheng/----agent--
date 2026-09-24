@@ -7,6 +7,11 @@ from typing import Any
 
 from app.agent.business_analysis.agent import get_business_analysis_agent
 from app.agent.business_analysis.events import to_public_event
+from app.agent.business_analysis.persistence import (
+    build_postgres_checkpoint,
+    build_postgres_store,
+    normalize_checkpoint_url,
+)
 from app.agent.business_analysis.schemas import AnalysisEvent, BusinessAnalysisRequest
 from app.agent.business_analysis.tools import bind_report_saver
 from app.core.config import get_settings
@@ -36,6 +41,24 @@ async def _connection_scope(connection: Any | None):
         return
     async with get_engine().begin() as active:
         yield active
+
+
+@asynccontextmanager
+async def _agent_scope(agent: Any | None):
+    if agent is not None:
+        yield agent
+        return
+
+    connection_string = normalize_checkpoint_url(get_settings().require_database_url())
+    async with build_postgres_checkpoint(connection_string) as checkpointer:
+        await checkpointer.setup()
+        async with build_postgres_store(connection_string) as store:
+            await store.setup()
+            yield get_business_analysis_agent(
+                force_rebuild=True,
+                checkpointer=checkpointer,
+                store=store,
+            )
 
 
 def _extract_text(value: Any) -> str:
@@ -110,46 +133,46 @@ async def run_business_analysis(
         raise BusinessAnalysisBusyError("该分析会话已有任务正在运行。")
     _active_threads.add(request.thread_id)
     settings = get_settings()
-    active_agent = agent or get_business_analysis_agent()
     report_chunks: list[str] = []
 
     try:
-        async with _connection_scope(connection) as active_connection:
-            run_id = await create_run(
-                active_connection,
-                thread_id=request.thread_id,
-                user_id=request.user_id,
-            )
-            yield AnalysisEvent.run_started(run_id)
+        async with _agent_scope(agent) as active_agent:
+            async with _connection_scope(connection) as active_connection:
+                run_id = await create_run(
+                    active_connection,
+                    thread_id=request.thread_id,
+                    user_id=request.user_id,
+                )
+                yield AnalysisEvent.run_started(run_id)
 
-            async def report_saver(*, run_id: str, report: dict[str, Any]) -> str:
-                return await save_report(active_connection, run_id=run_id, report=report)
+                async def report_saver(*, run_id: str, report: dict[str, Any]) -> str:
+                    return await save_report(active_connection, run_id=run_id, report=report)
 
-            async with bind_report_saver(report_saver):
-                try:
-                    async with asyncio.timeout(settings.business_analysis_run_timeout_seconds):
-                        async for event in _agent_events(
-                            active_agent,
-                            request,
-                            max_steps=settings.business_analysis_max_steps,
-                            max_tool_calls=settings.business_analysis_max_tool_calls,
-                        ):
-                            if event.type == "report_delta" and event.content:
-                                report_chunks.append(event.content)
-                            yield event
-                except _RunLimitReached:
-                    yield AnalysisEvent.error("AGENT_RUN_LIMIT_REACHED")
-                    return
-                except TimeoutError:
-                    yield AnalysisEvent.error("AGENT_RUN_TIMEOUT")
-                    return
+                async with bind_report_saver(report_saver):
+                    try:
+                        async with asyncio.timeout(settings.business_analysis_run_timeout_seconds):
+                            async for event in _agent_events(
+                                active_agent,
+                                request,
+                                max_steps=settings.business_analysis_max_steps,
+                                max_tool_calls=settings.business_analysis_max_tool_calls,
+                            ):
+                                if event.type == "report_delta" and event.content:
+                                    report_chunks.append(event.content)
+                                yield event
+                    except _RunLimitReached:
+                        yield AnalysisEvent.error("AGENT_RUN_LIMIT_REACHED")
+                        return
+                    except TimeoutError:
+                        yield AnalysisEvent.error("AGENT_RUN_TIMEOUT")
+                        return
 
-            report_id = await save_report(
-                active_connection,
-                run_id=run_id,
-                report={"summary": "".join(report_chunks)[: settings.business_analysis_context_char_limit]},
-            )
-            yield AnalysisEvent.run_completed(run_id, report_id)
+                report_id = await save_report(
+                    active_connection,
+                    run_id=run_id,
+                    report={"summary": "".join(report_chunks)[: settings.business_analysis_context_char_limit]},
+                )
+                yield AnalysisEvent.run_completed(run_id, report_id)
     except BusinessAnalysisBusyError:
         raise
     except Exception:

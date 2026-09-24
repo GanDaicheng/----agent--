@@ -3,11 +3,19 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import AsyncIterator
+from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
+from pydantic import BaseModel
 
+from app.agent.business_analysis.memory import (
+    load_user_preferences_from_db,
+    save_user_preference_to_db,
+)
 from app.agent.business_analysis.schemas import AnalysisEvent, BusinessAnalysisRequest
+from app.repositories.database import get_engine
+from app.services.analysis_report import load_thread_runs
 from app.services.business_analysis_runner import (
     BusinessAnalysisBusyError,
     is_thread_busy,
@@ -15,6 +23,31 @@ from app.services.business_analysis_runner import (
 )
 
 router = APIRouter()
+
+
+class PreferenceRequest(BaseModel):
+    key: Literal[
+        "currency_unit",
+        "preferred_region",
+        "preferred_chart",
+        "report_style",
+    ]
+    value: str | int | float | bool
+
+
+async def load_thread_history(thread_id: str) -> list[dict[str, object]]:
+    async with get_engine().connect() as connection:
+        return await load_thread_runs(connection, thread_id=thread_id)
+
+
+async def load_user_preferences_api(user_id: str) -> dict[str, Any]:
+    async with get_engine().connect() as connection:
+        return await load_user_preferences_from_db(connection, user_id)
+
+
+async def save_user_preference_api(user_id: str, key: str, value: Any) -> None:
+    async with get_engine().begin() as connection:
+        await save_user_preference_to_db(connection, user_id, key, value)
 
 
 def _format_sse(event: AnalysisEvent) -> str:
@@ -47,3 +80,31 @@ async def business_analysis_run(request: BusinessAnalysisRequest) -> StreamingRe
             "X-Accel-Buffering": "no",
         },
     )
+
+
+@router.get("/api/v1/agent/business-analysis/threads/{thread_id}")
+async def business_analysis_thread_history(thread_id: str) -> list[dict[str, object]]:
+    if not thread_id.strip() or len(thread_id) > 128:
+        raise HTTPException(status_code=422, detail="thread_id 不合法。")
+    return await load_thread_history(thread_id)
+
+
+@router.get("/api/v1/agent/business-analysis/preferences/{user_id}")
+async def business_analysis_preferences(user_id: str) -> dict[str, Any]:
+    if not user_id.strip() or len(user_id) > 128:
+        raise HTTPException(status_code=422, detail="user_id 不合法。")
+    return await load_user_preferences_api(user_id)
+
+
+@router.put(
+    "/api/v1/agent/business-analysis/preferences/{user_id}",
+    status_code=204,
+)
+async def update_business_analysis_preference(
+    user_id: str,
+    request: PreferenceRequest,
+) -> Response:
+    if not user_id.strip() or len(user_id) > 128:
+        raise HTTPException(status_code=422, detail="user_id 不合法。")
+    await save_user_preference_api(user_id, request.key, request.value)
+    return Response(status_code=204)

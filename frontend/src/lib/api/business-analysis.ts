@@ -15,6 +15,20 @@ export type BusinessAnalysisInput = {
   userId?: string;
 };
 
+export type AnalysisThreadRun = {
+  id: string;
+  thread_id: string;
+  status: string;
+  created_at?: string;
+  updated_at?: string;
+};
+
+export type UserPreferenceKey =
+  | "currency_unit"
+  | "preferred_region"
+  | "preferred_chart"
+  | "report_style";
+
 const EVENT_TYPES = new Set<BusinessAnalysisEvent["type"]>([
   "run_started",
   "status",
@@ -106,4 +120,36 @@ export async function runBusinessAnalysis(
   if (buffer.trim()) {
     for (const event of parseSseChunk(`${buffer}\n\n`)) onEvent(event);
   }
+}
+
+export async function loadAnalysisThread(threadId: string): Promise<AnalysisThreadRun[]> {
+  const response = await fetch(
+    buildApiUrl(`/api/v1/agent/business-analysis/threads/${encodeURIComponent(threadId)}`),
+  );
+  if (!response.ok) throw new Error(`读取分析会话失败（${response.status}）。`);
+  return (await response.json()) as AnalysisThreadRun[];
+}
+
+export async function loadUserPreferences(userId: string): Promise<Record<string, unknown>> {
+  const response = await fetch(
+    buildApiUrl(`/api/v1/agent/business-analysis/preferences/${encodeURIComponent(userId)}`),
+  );
+  if (!response.ok) throw new Error(`读取用户偏好失败（${response.status}）。`);
+  return (await response.json()) as Record<string, unknown>;
+}
+
+export async function saveUserPreference(
+  userId: string,
+  key: UserPreferenceKey,
+  value: string | number | boolean,
+): Promise<void> {
+  const response = await fetch(
+    buildApiUrl(`/api/v1/agent/business-analysis/preferences/${encodeURIComponent(userId)}`),
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ key, value }),
+    },
+  );
+  if (!response.ok) throw new Error(`保存用户偏好失败（${response.status}）。`);
 }

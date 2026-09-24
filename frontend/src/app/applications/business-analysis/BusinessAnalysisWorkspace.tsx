@@ -7,6 +7,8 @@ import { Notice } from "@/components/ui/Notice";
 import { isAbortError } from "@/lib/api/http";
 import {
   createAnonymousUserId,
+  loadAnalysisThread,
+  loadUserPreferences,
   runBusinessAnalysis,
   type BusinessAnalysisEvent,
 } from "@/lib/api/business-analysis";
@@ -44,10 +46,20 @@ export function BusinessAnalysisWorkspace() {
   const [question, setQuestion] = useState("");
   const [phase, setPhase] = useState<Phase>("idle");
   const [error, setError] = useState<string | null>(null);
+  const [preferenceHint, setPreferenceHint] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const userId = useMemo(() => createAnonymousUserId(), []);
 
   useEffect(() => () => abortRef.current?.abort(), []);
+
+  useEffect(() => {
+    void loadUserPreferences(userId)
+      .then((preferences) => {
+        const region = preferences.preferred_region;
+        if (typeof region === "string" && region) setPreferenceHint(`已加载偏好：${region}`);
+      })
+      .catch(() => undefined);
+  }, [userId]);
 
   const handleEvent = useCallback((event: BusinessAnalysisEvent) => {
     setEvents((current) => [...current, event]);
@@ -92,6 +104,29 @@ export function BusinessAnalysisWorkspace() {
     }
   }, [activeThread, handleEvent, phase, question, userId]);
 
+  const selectThread = useCallback(async (thread: Thread) => {
+    if (phase === "running") return;
+    setActiveThread(thread);
+    setMessages([]);
+    setEvents([]);
+    setReport("");
+    setError(null);
+    setPhase("idle");
+    try {
+      const runs = await loadAnalysisThread(thread.id);
+      if (runs.length > 0) {
+        setMessages([
+          {
+            role: "assistant",
+            content: `已恢复该会话，共 ${runs.length} 次分析任务；最近一次状态：${runs[0].status}。`,
+          },
+        ]);
+      }
+    } catch {
+      setError("历史会话读取失败，但仍可继续发起新的分析。");
+    }
+  }, [phase]);
+
   const cancel = useCallback(() => abortRef.current?.abort(), []);
   const startNew = useCallback(() => {
     abortRef.current?.abort();
@@ -110,10 +145,7 @@ export function BusinessAnalysisWorkspace() {
         threads={threads}
         activeId={activeThread.id}
         onNew={startNew}
-        onSelect={(thread) => {
-          if (phase === "running") return;
-          setActiveThread(thread);
-        }}
+        onSelect={(thread) => void selectThread(thread)}
       />
       <div className={styles.mainColumn}>
         <div className={styles.promptCard}>
@@ -149,7 +181,7 @@ export function BusinessAnalysisWorkspace() {
       <aside className={styles.sideColumn}>
         <div className={styles.sideHeader}><span>Agent 执行过程</span><span className={styles.eventCount}>{events.length} 个事件</span></div>
         <AnalysisEventTimeline events={events} />
-        <div className={styles.sideNote}>数据查询由现有安全问数工作流执行，知识规则来自 pgvector 知识库。</div>
+        <div className={styles.sideNote}>数据查询由现有安全问数工作流执行，知识规则来自 pgvector 知识库。{preferenceHint ? ` ${preferenceHint}` : ""}</div>
       </aside>
     </section>
   );

@@ -94,3 +94,31 @@ async def save_report(
         },
     )
     return report_id
+
+
+async def load_thread_runs(
+    connection: AsyncConnection,
+    *,
+    thread_id: str,
+) -> list[dict[str, object]]:
+    result = await connection.execute(
+        text(
+            """
+            SELECT id, thread_id, status, created_at, updated_at
+            FROM business_analysis_runs
+            WHERE thread_id = :thread_id
+            ORDER BY updated_at DESC
+            LIMIT 50
+            """
+        ),
+        {"thread_id": thread_id},
+    )
+    rows: list[dict[str, object]] = []
+    for row in result.mappings().all():
+        item = dict(row)
+        for key in ("created_at", "updated_at"):
+            value = item.get(key)
+            if hasattr(value, "isoformat"):
+                item[key] = value.isoformat()
+        rows.append(item)
+    return rows
