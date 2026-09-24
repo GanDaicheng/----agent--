@@ -173,7 +173,10 @@ async def run_business_analysis(
                         return
                     except asyncio.CancelledError:
                         await update_run_status(active_connection, run_id=run_id, status="cancelled")
-                        raise
+                        # The client has already disconnected. End the generator
+                        # normally so the surrounding transaction can commit the
+                        # cancellation status instead of rolling the run row back.
+                        return
 
                 report_id = await save_report(
                     active_connection,
