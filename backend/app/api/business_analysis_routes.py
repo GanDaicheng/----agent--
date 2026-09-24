@@ -7,11 +7,12 @@ from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import Response, StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 
 from app.agent.business_analysis.memory import (
     load_user_preferences_from_db,
     save_user_preference_to_db,
+    validate_user_preference,
 )
 from app.agent.business_analysis.schemas import AnalysisEvent, BusinessAnalysisRequest
 from app.repositories.database import get_engine
@@ -32,7 +33,12 @@ class PreferenceRequest(BaseModel):
         "preferred_chart",
         "report_style",
     ]
-    value: str | int | float | bool
+    value: str
+
+    @model_validator(mode="after")
+    def validate_value(self) -> "PreferenceRequest":
+        validate_user_preference(self.key, self.value)
+        return self
 
 
 async def load_thread_history(thread_id: str) -> list[dict[str, object]]:

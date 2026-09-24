@@ -11,6 +11,7 @@ import {
   loadAnalysisThreads,
   loadUserPreferences,
   runBusinessAnalysis,
+  saveUserPreference,
   type BusinessAnalysisEvent,
 } from "@/lib/api/business-analysis";
 
@@ -48,6 +49,7 @@ export function BusinessAnalysisWorkspace() {
   const [phase, setPhase] = useState<Phase>("idle");
   const [error, setError] = useState<string | null>(null);
   const [preferenceHint, setPreferenceHint] = useState<string | null>(null);
+  const [preferredRegion, setPreferredRegion] = useState("全国");
   const abortRef = useRef<AbortController | null>(null);
   const userId = useMemo(() => createAnonymousUserId(), []);
 
@@ -57,7 +59,10 @@ export function BusinessAnalysisWorkspace() {
     void loadUserPreferences(userId)
       .then((preferences) => {
         const region = preferences.preferred_region;
-        if (typeof region === "string" && region) setPreferenceHint(`已加载偏好：${region}`);
+        if (typeof region === "string" && region) {
+          setPreferredRegion(region);
+          setPreferenceHint(`已加载偏好：${region}`);
+        }
       })
       .catch(() => undefined);
   }, [userId]);
@@ -189,6 +194,26 @@ export function BusinessAnalysisWorkspace() {
           <div className={styles.exampleRow}>
             {EXAMPLES.map((example) => <button key={example} type="button" onClick={() => setQuestion(example)}>{example.slice(0, 18)}…</button>)}
           </div>
+          <label className={styles.preferenceRow} htmlFor="business-analysis-region">
+            默认分析区域
+            <select
+              id="business-analysis-region"
+              value={preferredRegion}
+              disabled={phase === "running"}
+              onChange={(event) => {
+                const region = event.target.value;
+                setPreferredRegion(region);
+                setPreferenceHint(`已加载偏好：${region}`);
+                void saveUserPreference(userId, "preferred_region", region).catch(() => {
+                  setError("默认分析区域保存失败，本次分析不会受影响。");
+                });
+              }}
+            >
+              {["全国", "华东", "华南", "华北", "华中", "西南", "西北", "东北"].map((region) => (
+                <option key={region} value={region}>{region}</option>
+              ))}
+            </select>
+          </label>
         </div>
 
         {error ? <Notice tone="danger" tag="分析失败">{error}</Notice> : null}

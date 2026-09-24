@@ -12,7 +12,20 @@ ALLOWED_PREFERENCE_KEYS = {
     "preferred_chart",
     "report_style",
 }
+PREFERENCE_ALLOWED_VALUES = {
+    "currency_unit": {"元", "万元", "亿元"},
+    "preferred_region": {"全国", "华东", "华南", "华北", "华中", "西南", "西北", "东北"},
+    "preferred_chart": {"line", "bar", "table"},
+    "report_style": {"简洁", "详细"},
+}
 MEMORY_NAMESPACE = "business_analysis_preferences"
+
+
+def validate_user_preference(key: str, value: Any) -> None:
+    if key not in ALLOWED_PREFERENCE_KEYS:
+        raise ValueError(f"不允许保存该用户偏好：{key}")
+    if not isinstance(value, str) or value not in PREFERENCE_ALLOWED_VALUES[key]:
+        raise ValueError(f"用户偏好值不合法：{key}")
 
 
 async def load_user_preferences(store: Any, user_id: str | None) -> dict[str, Any]:
@@ -31,14 +44,9 @@ async def load_user_preferences(store: Any, user_id: str | None) -> dict[str, An
 
 
 async def save_user_preference(store: Any, user_id: str, key: str, value: Any) -> None:
-    if key not in ALLOWED_PREFERENCE_KEYS:
-        raise ValueError(f"不允许保存该用户偏好：{key}")
+    validate_user_preference(key, value)
     if not user_id.strip():
         raise ValueError("user_id 不能为空白。")
-    if not isinstance(value, (str, int, float, bool)):
-        raise ValueError("用户偏好只能保存基础 JSON 值。")
-    if isinstance(value, str) and len(value) > 128:
-        raise ValueError("用户偏好文本过长。")
     await store.aput((MEMORY_NAMESPACE, user_id), key, {"value": value})
 
 
@@ -60,6 +68,10 @@ async def load_user_preferences_from_db(connection: Any, user_id: str) -> dict[s
             value = row.get("memory_value")
             if isinstance(value, dict) and "value" in value:
                 value = value["value"]
+            try:
+                validate_user_preference(key, value)
+            except ValueError:
+                continue
             preferences[key] = value
     return preferences
 
@@ -70,12 +82,9 @@ async def save_user_preference_to_db(
     key: str,
     value: Any,
 ) -> None:
-    if key not in ALLOWED_PREFERENCE_KEYS:
-        raise ValueError(f"不允许保存该用户偏好：{key}")
-    if not user_id.strip() or not isinstance(value, (str, int, float, bool)):
+    validate_user_preference(key, value)
+    if not user_id.strip():
         raise ValueError("用户偏好参数不合法。")
-    if isinstance(value, str) and len(value) > 128:
-        raise ValueError("用户偏好文本过长。")
     await connection.execute(
         text(
             """

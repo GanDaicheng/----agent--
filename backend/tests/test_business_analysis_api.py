@@ -113,3 +113,13 @@ def test_business_analysis_preferences_can_be_read_and_written(monkeypatch):
     assert read_response.status_code == 200
     assert read_response.json() == {"currency_unit": "万元"}
     assert write_response.status_code == 204
+
+
+def test_business_analysis_preferences_reject_invalid_fixed_value():
+    with TestClient(app) as client:
+        response = client.put(
+            "/api/v1/agent/business-analysis/preferences/user-1",
+            json={"key": "preferred_chart", "value": "pie"},
+        )
+
+    assert response.status_code == 422

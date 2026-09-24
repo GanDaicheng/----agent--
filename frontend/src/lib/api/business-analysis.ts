@@ -160,7 +160,7 @@ export async function loadUserPreferences(userId: string): Promise<Record<string
 export async function saveUserPreference(
   userId: string,
   key: UserPreferenceKey,
-  value: string | number | boolean,
+  value: string,
 ): Promise<void> {
   const response = await fetch(
     buildApiUrl(`/api/v1/agent/business-analysis/preferences/${encodeURIComponent(userId)}`),

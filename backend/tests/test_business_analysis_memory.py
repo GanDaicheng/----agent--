@@ -44,6 +44,14 @@ async def test_unknown_preference_key_is_rejected():
         await save_user_preference(store, "user-1", "prompt", "secret")
 
 
+@pytest.mark.anyio
+async def test_preference_value_must_match_its_fixed_allowed_values():
+    store = FakeStore()
+
+    with pytest.raises(ValueError):
+        await save_user_preference(store, "user-1", "preferred_chart", "pie")
+
+
 def test_checkpoint_url_removes_sqlalchemy_driver_suffix():
     assert normalize_checkpoint_url(
         "postgresql+asyncpg://user:pass@localhost/db"
