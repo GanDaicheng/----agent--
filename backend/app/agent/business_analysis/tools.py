@@ -182,5 +182,4 @@ BUSINESS_ANALYSIS_TOOLS = (
     analyze_business_data,
     search_business_knowledge,
     get_metric_definition,
-    save_analysis_report,
 )

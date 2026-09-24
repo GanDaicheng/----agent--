@@ -25,7 +25,6 @@ def test_agent_exposes_only_business_tools(monkeypatch):
         "analyze_business_data",
         "search_business_knowledge",
         "get_metric_definition",
-        "save_analysis_report",
     }
 
 
@@ -33,6 +32,8 @@ def test_prompt_requires_evidence_and_rejects_unsupported_claims():
     assert "不得编造" in BUSINESS_ANALYSIS_SYSTEM_PROMPT
     assert "数据证据" in BUSINESS_ANALYSIS_SYSTEM_PROMPT
     assert "SQL" in BUSINESS_ANALYSIS_SYSTEM_PROMPT
+    assert "同一任务内最多调用一次 analyze_business_data" in BUSINESS_ANALYSIS_SYSTEM_PROMPT
+    assert "不得通过改写问法重复调用" in BUSINESS_ANALYSIS_SYSTEM_PROMPT
 
 
 def test_agent_uses_supplied_model_and_persistence(monkeypatch):

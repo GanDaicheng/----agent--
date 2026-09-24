@@ -10,7 +10,7 @@ def test_business_analysis_limits_have_safe_defaults():
 
     settings = get_settings()
 
-    assert settings.business_analysis_max_steps == 12
-    assert settings.business_analysis_max_tool_calls == 8
-    assert settings.business_analysis_run_timeout_seconds == 90
+    assert settings.business_analysis_max_steps == 60
+    assert settings.business_analysis_max_tool_calls == 24
+    assert settings.business_analysis_run_timeout_seconds == 180
     assert settings.business_analysis_context_char_limit == 12000
