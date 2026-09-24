@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import json
+from contextlib import asynccontextmanager
 from types import SimpleNamespace
 
 import pytest
 
 from app.agent.business_analysis.schemas import BusinessAnalysisRequest
+from app.core.exceptions import ConfigurationError
 from app.services.business_analysis_runner import (
     BusinessAnalysisBusyError,
     run_business_analysis,
@@ -59,6 +61,30 @@ async def test_runner_emits_start_tool_report_and_complete_events():
         "run_completed",
     ]
     assert any("UPDATE business_analysis_runs" in str(statement) for statement, _ in connection.statements)
+
+
+@pytest.mark.anyio
+async def test_runner_exposes_a_specific_event_when_model_configuration_is_missing(monkeypatch):
+    @asynccontextmanager
+    async def unavailable_agent(_agent):
+        raise ConfigurationError("缺少 OPENAI_API_KEY")
+        yield None
+
+    monkeypatch.setattr(
+        "app.services.business_analysis_runner._agent_scope",
+        unavailable_agent,
+    )
+
+    events = [
+        event
+        async for event in run_business_analysis(
+            BusinessAnalysisRequest(thread_id="missing-model-config", message="分析销售额"),
+            connection=FakeConnection(),
+        )
+    ]
+
+    assert [event.type for event in events] == ["error"]
+    assert events[0].error_code == "AGENT_CONFIGURATION_ERROR"
 
 
 @pytest.mark.anyio

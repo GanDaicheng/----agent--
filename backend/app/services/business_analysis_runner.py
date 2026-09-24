@@ -20,6 +20,7 @@ from app.agent.business_analysis.persistence import (
 from app.agent.business_analysis.schemas import AnalysisEvent, BusinessAnalysisRequest
 from app.agent.business_analysis.tools import bind_report_saver
 from app.core.config import get_settings
+from app.core.exceptions import ConfigurationError
 from app.repositories.database import get_engine
 from app.services.analysis_report import create_run, save_report, update_run_status
 
@@ -265,6 +266,8 @@ async def run_business_analysis(
                 yield AnalysisEvent.run_completed(run_id, report_id)
     except BusinessAnalysisBusyError:
         raise
+    except ConfigurationError:
+        yield AnalysisEvent.error("AGENT_CONFIGURATION_ERROR")
     except Exception:
         if run_id is not None and active_connection_ref is not None:
             await update_run_status(active_connection_ref, run_id=run_id, status="failed")

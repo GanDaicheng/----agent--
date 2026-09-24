@@ -95,6 +95,19 @@ export function createAnonymousUserId(): string {
   }
 }
 
+function deliverEvent(
+  event: BusinessAnalysisEvent,
+  onEvent: (event: BusinessAnalysisEvent) => void,
+): void {
+  onEvent(event);
+  if (event.type === "error") {
+    const message = event.error_code === "AGENT_CONFIGURATION_ERROR"
+      ? "模型服务尚未配置，请在 .env 中填写 OPENAI_API_KEY 后重启服务。"
+      : "经营分析没有完成，请查看执行过程或稍后重试。";
+    throw new Error(message);
+  }
+}
+
 export async function runBusinessAnalysis(
   input: BusinessAnalysisInput,
   signal: AbortSignal,
@@ -123,13 +136,15 @@ export async function runBusinessAnalysis(
     buffer += decoder.decode(value, { stream: !done });
     const boundary = buffer.lastIndexOf("\n\n");
     if (boundary >= 0) {
-      for (const event of parseSseChunk(buffer.slice(0, boundary + 2))) onEvent(event);
+      for (const event of parseSseChunk(buffer.slice(0, boundary + 2))) {
+        deliverEvent(event, onEvent);
+      }
       buffer = buffer.slice(boundary + 2);
     }
     if (done) break;
   }
   if (buffer.trim()) {
-    for (const event of parseSseChunk(`${buffer}\n\n`)) onEvent(event);
+    for (const event of parseSseChunk(`${buffer}\n\n`)) deliverEvent(event, onEvent);
   }
 }
 
