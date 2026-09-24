@@ -38,4 +38,3 @@ export function getWorkflowHighlight(
     edgeIds: new Set(workflow.edgeIds),
   };
 }
-

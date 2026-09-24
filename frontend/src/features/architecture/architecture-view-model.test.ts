@@ -38,4 +38,3 @@ describe("architecture view model", () => {
     expect(highlight.nodeIds.has("app-data-sources")).toBe(false);
   });
 });
-
