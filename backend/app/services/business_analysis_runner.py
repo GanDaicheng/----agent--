@@ -25,6 +25,10 @@ class _RunLimitReached(RuntimeError):
 _active_threads: set[str] = set()
 
 
+def is_thread_busy(thread_id: str) -> bool:
+    return thread_id in _active_threads
+
+
 @asynccontextmanager
 async def _connection_scope(connection: Any | None):
     if connection is not None:

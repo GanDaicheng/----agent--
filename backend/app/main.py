@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.api.business_analysis_routes import router as business_analysis_router
 from app.api.routes import router
 from app.core.logging import configure_logging
 from app.repositories.database import dispose_engine
@@ -57,3 +58,4 @@ app.add_middleware(
 )
 
 app.include_router(router)
+app.include_router(business_analysis_router)
