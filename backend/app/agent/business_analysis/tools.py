@@ -6,6 +6,7 @@ from langchain_core.tools import tool
 
 from app.agent.data_query.graph import get_data_query_graph
 from app.agent.business_analysis.schemas import ToolResult
+from app.services.knowledge_retrieval import retrieve_knowledge
 
 
 def _public_query_result(value: Any) -> dict[str, Any] | None:
@@ -73,4 +74,75 @@ async def analyze_business_data(question: str) -> dict[str, Any]:
     ).model_dump()
 
 
-BUSINESS_ANALYSIS_TOOLS = (analyze_business_data,)
+def _source_to_public(candidate: Any) -> dict[str, Any] | None:
+    chunk = getattr(candidate, "chunk", None)
+    if chunk is None:
+        return None
+    source_file = getattr(chunk, "source_file", None)
+    document_title = getattr(chunk, "document_title", None)
+    section_title = getattr(chunk, "section_title", None)
+    content = getattr(chunk, "content", None)
+    similarity = getattr(candidate, "similarity", None)
+    if not all(isinstance(value, str) for value in (source_file, document_title, section_title, content)):
+        return None
+    return {
+        "source_file": source_file,
+        "document_title": document_title,
+        "section_title": section_title,
+        "similarity": float(similarity) if isinstance(similarity, (int, float)) else None,
+        "preview": content[:500],
+    }
+
+
+async def _search_business_knowledge(query: str, *, top_k: int = 4) -> dict[str, Any]:
+    normalized_query = query.strip()
+    if not normalized_query:
+        return ToolResult(status="error", summary="检索问题不能为空白。").model_dump()
+    if isinstance(top_k, bool) or not isinstance(top_k, int) or not 1 <= top_k <= 10:
+        return ToolResult(status="error", summary="检索条数必须在1到10之间。").model_dump()
+
+    try:
+        retrieval = await retrieve_knowledge(normalized_query, final_top_k=top_k)
+    except Exception:  # noqa: BLE001 - public tool returns a fixed degradation result
+        return ToolResult(
+            status="degraded",
+            summary="知识库暂时不可用，已跳过本次知识检索。",
+        ).model_dump()
+
+    sources = [
+        source
+        for candidate in getattr(retrieval, "results", ())
+        if (source := _source_to_public(candidate)) is not None
+    ]
+    if not sources:
+        return ToolResult(
+            status="not_found",
+            summary="知识库中没有检索到足够相关的资料。",
+        ).model_dump()
+
+    return ToolResult(
+        status="ok",
+        summary=f"检索到 {len(sources)} 条相关业务资料。",
+        sources=sources,
+    ).model_dump()
+
+
+@tool
+async def search_business_knowledge(query: str, top_k: int = 4) -> dict[str, Any]:
+    """检索指标口径、促销政策、会员规则等业务知识，并返回资料来源。"""
+
+    return await _search_business_knowledge(query, top_k=top_k)
+
+
+@tool
+async def get_metric_definition(metric: str) -> dict[str, Any]:
+    """获取一个业务指标的定义和来源，不使用模型常识补全口径。"""
+
+    return await _search_business_knowledge(f"指标定义：{metric.strip()}", top_k=4)
+
+
+BUSINESS_ANALYSIS_TOOLS = (
+    analyze_business_data,
+    search_business_knowledge,
+    get_metric_definition,
+)

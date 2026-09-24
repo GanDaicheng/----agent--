@@ -1,4 +1,5 @@
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -44,3 +45,69 @@ def test_business_analysis_tools_do_not_import_database_drivers():
     assert "sqlalchemy" not in source
     assert "asyncpg" not in source
     assert "get_engine" not in source
+
+
+@pytest.mark.anyio
+async def test_search_business_knowledge_returns_bounded_sources(monkeypatch):
+    from app.agent.business_analysis.tools import search_business_knowledge
+
+    candidate = SimpleNamespace(
+        chunk=SimpleNamespace(
+            source_file="promotion_calendar.md",
+            document_title="促销日历",
+            section_title="第三季度活动",
+            content="家电品类在九月没有大型促销活动。" * 100,
+        ),
+        similarity=0.91,
+    )
+    fake_result = SimpleNamespace(results=(candidate,))
+
+    async def fake_retrieve(question, *, final_top_k):
+        assert question == "促销规则"
+        assert final_top_k == 4
+        return fake_result
+
+    monkeypatch.setattr(
+        "app.agent.business_analysis.tools.retrieve_knowledge",
+        fake_retrieve,
+    )
+    result = await search_business_knowledge.ainvoke(
+        {"query": "促销规则", "top_k": 4}
+    )
+
+    assert result["status"] == "ok"
+    assert result["sources"][0]["source_file"] == "promotion_calendar.md"
+    assert len(result["sources"][0]["preview"]) <= 500
+
+
+@pytest.mark.anyio
+async def test_search_business_knowledge_degrades_on_retrieval_failure(monkeypatch):
+    from app.agent.business_analysis.tools import search_business_knowledge
+
+    async def fail(*args, **kwargs):
+        raise RuntimeError("database detail must stay private")
+
+    monkeypatch.setattr("app.agent.business_analysis.tools.retrieve_knowledge", fail)
+    result = await search_business_knowledge.ainvoke({"query": "促销规则"})
+
+    assert result["status"] == "degraded"
+    assert result["sources"] == []
+    assert "database detail" not in result["summary"]
+
+
+@pytest.mark.anyio
+async def test_get_metric_definition_uses_knowledge_search(monkeypatch):
+    from app.agent.business_analysis.tools import get_metric_definition
+
+    async def fake_search(query, *, top_k):
+        assert query == "指标定义：复购率"
+        return {"status": "ok", "summary": "复购率定义", "data": {}, "sources": [], "artifact_id": None}
+
+    monkeypatch.setattr(
+        "app.agent.business_analysis.tools._search_business_knowledge",
+        fake_search,
+    )
+    result = await get_metric_definition.ainvoke({"metric": "复购率"})
+
+    assert result["status"] == "ok"
+    assert result["summary"] == "复购率定义"
