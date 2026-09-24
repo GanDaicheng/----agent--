@@ -1,43 +1,410 @@
-.workspace { display: grid; grid-template-columns: 190px minmax(0, 1fr) 280px; gap: 16px; margin-top: 24px; align-items: start; }
-.threadColumn, .sideColumn, .promptCard, .reportPanel { border: 1px solid var(--border-subtle, #d9dee7); background: var(--surface, #fff); border-radius: 14px; }
-.threadColumn { padding: 14px; min-height: 560px; }
-.threadHeader, .sideHeader, .reportHeader { display: flex; justify-content: space-between; align-items: center; font-weight: 700; }
-.threadHeader button, .exampleRow button { border: 0; background: transparent; color: #4a5b78; cursor: pointer; }
-.threadList { list-style: none; padding: 12px 0 0; margin: 0; display: grid; gap: 6px; }
-.thread, .activeThread { width: 100%; text-align: left; border: 0; border-radius: 9px; padding: 10px; cursor: pointer; display: grid; gap: 5px; }
-.thread { background: transparent; color: inherit; }
-.activeThread { background: #edf3ff; color: #1c4a9c; }
-.thread small { color: #7b879a; }
-.mainColumn { display: grid; gap: 14px; min-width: 0; }
-.promptCard { padding: 18px; display: grid; gap: 10px; }
-.promptCard label { font-weight: 700; }
-.promptCard textarea { resize: vertical; border: 1px solid #cfd6e2; border-radius: 9px; padding: 12px; font: inherit; min-height: 76px; }
-.promptActions { display: flex; gap: 8px; }
-.promptActions button { border: 0; border-radius: 8px; padding: 9px 15px; background: #1d4ed8; color: white; cursor: pointer; }
-.promptActions button:disabled { opacity: .5; cursor: not-allowed; }
-.secondaryButton { background: #eef2f7 !important; color: #334155 !important; }
-.exampleRow { display: flex; flex-wrap: wrap; gap: 7px; }
-.exampleRow button { padding: 5px 8px; border-radius: 999px; background: #f3f6fa; font-size: 12px; }
-.preferenceRow { display: flex; align-items: center; gap: 8px; color: #475569; font-size: 13px; }
-.preferenceRow select { border: 1px solid #cfd6e2; border-radius: 7px; padding: 5px 8px; background: #fff; font: inherit; }
-.messageList { display: grid; gap: 10px; }
-.userMessage, .assistantMessage { padding: 12px 14px; border-radius: 12px; }
-.userMessage { background: #edf3ff; margin-left: 14%; }
-.assistantMessage { background: #f5f7fa; margin-right: 14%; }
-.messageRole { font-size: 11px; color: #64748b; font-weight: 700; }
-.userMessage p, .assistantMessage p { margin: 5px 0 0; white-space: pre-wrap; }
-.sideColumn { padding: 16px; min-height: 560px; }
-.eventCount, .reportBadge { font-size: 11px; color: #64748b; font-weight: 500; }
-.eventList { list-style: none; margin: 18px 0; padding: 0; display: grid; gap: 14px; }
-.eventList li { display: grid; grid-template-columns: 12px 1fr; gap: 8px; align-items: start; }
-.eventList strong { display: block; font-size: 13px; }
-.eventList small { display: block; margin-top: 4px; color: #64748b; line-height: 1.4; }
-.eventDot { display: block; width: 8px; height: 8px; margin-top: 4px; border-radius: 50%; background: #94a3b8; }
-.eventDot[data-type="tool_started"] { background: #f59e0b; }
-.eventDot[data-type="tool_completed"], .eventDot[data-type="run_completed"] { background: #16a34a; }
-.eventDot[data-type="error"] { background: #dc2626; }
-.reportPanel { padding: 18px; }
-.reportText { white-space: pre-wrap; overflow-x: auto; margin: 14px 0 0; font: inherit; line-height: 1.65; color: #263246; }
-.sideNote, .muted { color: #718096; font-size: 12px; line-height: 1.6; }
-@media (max-width: 1100px) { .workspace { grid-template-columns: 170px minmax(0, 1fr); } .sideColumn { grid-column: 1 / -1; min-height: auto; } }
-@media (max-width: 720px) { .workspace { grid-template-columns: 1fr; } .threadColumn { min-height: auto; } .userMessage, .assistantMessage { margin: 0; } }
+/*
+ * 对话式工作台的布局。
+ *
+ * 整个工作台按视口定高，只有消息区和会话列表各自滚动：
+ * 聊天页最怕「页面越读越长」——输入框被长回答顶到屏幕外，每问一次都要先滚回底部。
+ * 所以高度锁在这里，让滚动发生在内部。
+ */
+
+.workspace {
+  display: grid;
+  grid-template-columns: 220px minmax(0, 1fr);
+  gap: var(--space-4);
+  /* 顶栏 + .content 的上下内边距。dvh 让移动端地址栏收放时高度跟着变。 */
+  height: calc(100vh - var(--topbar-height) - var(--space-6) - var(--space-8));
+  height: calc(100dvh - var(--topbar-height) - var(--space-6) - var(--space-8));
+  min-height: 520px;
+}
+
+/* ---------------------------- 左侧会话列表 ---------------------------- */
+
+.threadColumn {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-height: 0;
+  padding: var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.threadHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+}
+
+.threadHeader button {
+  padding: var(--space-1) var(--space-2);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--primary);
+  font: inherit;
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+
+.threadHeader button:hover {
+  background: var(--primary-soft);
+}
+
+/* 列表比栏位高时自己滚，栏头留在原地。 */
+.threadList {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.thread,
+.activeThread {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: var(--text-sm);
+  text-align: left;
+  cursor: pointer;
+}
+
+.thread:hover:not(:disabled) {
+  background: var(--surface-sunken);
+}
+
+.activeThread {
+  background: var(--primary-soft);
+  color: var(--primary-hover);
+}
+
+.thread:disabled,
+.activeThread:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.thread span,
+.activeThread span {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.thread small,
+.activeThread small {
+  font-size: var(--text-xs);
+  color: var(--text-subtle);
+}
+
+.muted {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  line-height: var(--leading-normal);
+}
+
+/* ------------------------------ 右侧聊天区 ------------------------------ */
+
+.chatColumn {
+  display: grid;
+  /* 紧凑标题栏 / 可滚动消息区 / 底部输入区 */
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  min-width: 0;
+  min-height: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  /* 裁掉内部滚动区溢出的直角，让圆角是真的圆角。 */
+  overflow: hidden;
+}
+
+.chatHeader {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--border);
+}
+
+.chatTitle {
+  margin: 0;
+  font-size: var(--text-md);
+  font-weight: var(--weight-semibold);
+}
+
+.chatThreadTitle {
+  margin: 0;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+
+.chatScroll {
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--space-5) var(--space-4);
+}
+
+/* ------------------------------- 欢迎页 ------------------------------- */
+
+.welcome {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  max-width: 620px;
+  margin: var(--space-6) auto;
+}
+
+.welcomeTitle {
+  margin: 0;
+  font-size: var(--text-lg);
+  font-weight: var(--weight-semibold);
+}
+
+.welcomeText {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  line-height: var(--leading-relaxed);
+}
+
+.welcomeExamples {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: var(--space-2) 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.welcomeExamples button {
+  width: 100%;
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-muted);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--text-sm);
+  text-align: left;
+  cursor: pointer;
+}
+
+.welcomeExamples button:hover {
+  border-color: var(--primary-border);
+  background: var(--primary-soft);
+  color: var(--primary-hover);
+}
+
+/* ------------------------------- 消息流 ------------------------------- */
+
+.messageList {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+
+.userMessage {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.userBubble {
+  max-width: 75%;
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--primary-border);
+  border-radius: var(--radius);
+  background: var(--primary-soft);
+  line-height: var(--leading-normal);
+  /* 用户输入按原样显示，不解析 Markdown，换行要留住。 */
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* Agent 回答是「分析稿」不是聊天气泡：不给底色，让正文自己占版面。 */
+.assistantMessage {
+  min-width: 0;
+}
+
+.assistantRole {
+  margin: 0 0 var(--space-2);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
+  letter-spacing: 0.04em;
+  color: var(--text-subtle);
+}
+
+.statusLine {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0 0 var(--space-2);
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+
+.assistantMessage[data-status="error"] .statusLine {
+  color: var(--danger);
+}
+
+/* 取消是用户自己按的，不是故障，所以走中性色而不是红或黄。 */
+.assistantMessage[data-status="cancelled"] .statusLine {
+  color: var(--text-muted);
+}
+
+.statusDot {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  animation: statusPulse 1.2s ease-in-out infinite;
+}
+
+@keyframes statusPulse {
+  0%,
+  100% {
+    opacity: 0.25;
+    transform: scale(0.8);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .statusDot {
+    animation: none;
+    opacity: 0.8;
+  }
+}
+
+/* ------------------------------ 底部输入区 ------------------------------ */
+
+.composer {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border-top: 1px solid var(--border);
+}
+
+.composerInput {
+  flex: 1;
+  min-width: 0;
+  /* 高度由 JS 按内容设置，这里只负责封顶——超过就内部滚动，不顶页面。 */
+  max-height: 160px;
+  overflow-y: auto;
+  resize: none;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  line-height: var(--leading-normal);
+}
+
+.composerInput:disabled {
+  background: var(--surface-sunken);
+  color: var(--text-muted);
+  cursor: not-allowed;
+}
+
+.sendButton,
+.stopButton {
+  flex: none;
+  padding: var(--space-2) var(--space-4);
+  border-radius: var(--radius-sm);
+  font: inherit;
+  font-weight: var(--weight-medium);
+  cursor: pointer;
+}
+
+.sendButton {
+  border: 1px solid var(--primary);
+  background: var(--primary);
+  color: var(--on-primary);
+}
+
+.sendButton:hover:not(:disabled) {
+  border-color: var(--primary-hover);
+  background: var(--primary-hover);
+}
+
+.sendButton:disabled {
+  border-color: var(--primary-disabled);
+  background: var(--primary-disabled);
+  cursor: not-allowed;
+}
+
+.stopButton {
+  border: 1px solid var(--border-strong);
+  background: var(--surface-sunken);
+  color: var(--text);
+}
+
+.stopButton:hover {
+  border-color: var(--danger-border);
+  color: var(--danger);
+}
+
+/* ------------------------------- 响应式 ------------------------------- */
+
+/* 与 .content 在窄屏下的内边距保持一致，否则高度会算多 4px。 */
+@media (max-width: 900px) {
+  .workspace {
+    height: calc(100vh - var(--topbar-height) - var(--space-5) - var(--space-8));
+    height: calc(100dvh - var(--topbar-height) - var(--space-5) - var(--space-8));
+  }
+}
+
+/* 窄屏：会话栏叠到聊天区上方，限高后自己滚，聊天区继续占满剩下的高度。 */
+@media (max-width: 720px) {
+  .workspace {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+    gap: var(--space-3);
+  }
+
+  .threadColumn {
+    max-height: 172px;
+  }
+
+  .userBubble {
+    max-width: 90%;
+  }
+
+  .chatScroll {
+    padding: var(--space-4) var(--space-3);
+  }
+
+  .composer {
+    padding: var(--space-3);
+  }
+
+  .chatThreadTitle {
+    display: none;
+  }
+}

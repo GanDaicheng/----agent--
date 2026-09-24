@@ -2,70 +2,92 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { EmptyState } from "@/components/ui/EmptyState";
-import { Notice } from "@/components/ui/Notice";
 import { isAbortError } from "@/lib/api/http";
 import {
   createAnonymousUserId,
   loadAnalysisThread,
   loadAnalysisThreads,
-  loadUserPreferences,
   runBusinessAnalysis,
-  saveUserPreference,
-  type BusinessAnalysisEvent,
 } from "@/lib/api/business-analysis";
 
-import { AnalysisEventTimeline } from "@/components/business-analysis/AnalysisEventTimeline";
+import { AnalysisComposer } from "@/components/business-analysis/AnalysisComposer";
 import { AnalysisMessageList } from "@/components/business-analysis/AnalysisMessageList";
-import { AnalysisReportPanel } from "@/components/business-analysis/AnalysisReportPanel";
 import { AnalysisThreadList } from "@/components/business-analysis/AnalysisThreadList";
 import styles from "./business-analysis.module.css";
+import {
+  CANCELLED_STATUS_TEXT,
+  GENERIC_ERROR_TEXT,
+  INCOMPLETE_STREAM_TEXT,
+  createMessagesFromRuns,
+  reduceAssistantEvent,
+  type ChatMessage,
+} from "./business-analysis-view-model";
 
 type Phase = "idle" | "running" | "done" | "cancelled" | "failed";
-type Message = { role: "user" | "assistant"; content: string };
 type Thread = { id: string; title: string; updatedAt: string };
 
+/** 示例只填入输入框，不直接发送——点一下就是一次真实的模型调用，太重了。 */
 const EXAMPLES = [
-  "分析华东地区第三季度销售下降原因，找出影响最大的品类，并结合促销规则给出建议。",
-  "对比华东和华南的会员复购率，解释差异并给出提升建议。",
-  "分析今年销售额的季节性变化，结合促销日历判断可能原因。",
+  {
+    label: "分析华东第三季度销售下降原因…",
+    question:
+      "分析华东地区第三季度销售下降原因，找出影响最大的品类，并结合促销规则给出建议。",
+  },
+  {
+    label: "对比华东和华南会员复购率…",
+    question: "对比华东和华南的会员复购率，解释差异并给出提升建议。",
+  },
+  {
+    label: "分析全年销售额季节性变化…",
+    question: "分析今年销售额的季节性变化，结合促销日历判断可能原因。",
+  },
 ];
 
+function now(): string {
+  return new Date().toLocaleTimeString("zh-CN", {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
 function newThread(): Thread {
-  return {
-    id: crypto.randomUUID(),
-    title: "新的经营分析",
-    updatedAt: new Date().toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" }),
-  };
+  return { id: crypto.randomUUID(), title: "新的经营分析", updatedAt: now() };
+}
+
+function Welcome({ onPick }: { onPick: (question: string) => void }) {
+  return (
+    <div className={styles.welcome}>
+      <h2 className={styles.welcomeTitle}>AI 经营分析助手</h2>
+      <p className={styles.welcomeText}>
+        可以帮你分析经营数据、核对指标口径，并结合业务知识给出建议。
+      </p>
+      <ul className={styles.welcomeExamples}>
+        {EXAMPLES.map((example) => (
+          <li key={example.label}>
+            <button type="button" onClick={() => onPick(example.question)}>
+              {example.label}
+            </button>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
 }
 
 export function BusinessAnalysisWorkspace() {
   const [threads, setThreads] = useState<Thread[]>([]);
   const [activeThread, setActiveThread] = useState<Thread>(() => newThread());
-  const [messages, setMessages] = useState<Message[]>([]);
-  const [events, setEvents] = useState<BusinessAnalysisEvent[]>([]);
-  const [report, setReport] = useState("");
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [question, setQuestion] = useState("");
   const [phase, setPhase] = useState<Phase>("idle");
-  const [error, setError] = useState<string | null>(null);
-  const [preferenceHint, setPreferenceHint] = useState<string | null>(null);
-  const [preferredRegion, setPreferredRegion] = useState("全国");
   const abortRef = useRef<AbortController | null>(null);
+  const bottomRef = useRef<HTMLDivElement | null>(null);
+  const inputRef = useRef<HTMLTextAreaElement | null>(null);
+  /** 打开历史会话是异步的，这个序号用来丢弃「切走之后才回来的」旧响应。 */
+  const loadSeqRef = useRef(0);
   const userId = useMemo(() => createAnonymousUserId(), []);
 
   useEffect(() => () => abortRef.current?.abort(), []);
-
-  useEffect(() => {
-    void loadUserPreferences(userId)
-      .then((preferences) => {
-        const region = preferences.preferred_region;
-        if (typeof region === "string" && region) {
-          setPreferredRegion(region);
-          setPreferenceHint(`已加载偏好：${region}`);
-        }
-      })
-      .catch(() => undefined);
-  }, [userId]);
 
   useEffect(() => {
     void loadAnalysisThreads(userId)
@@ -81,152 +103,170 @@ export function BusinessAnalysisWorkspace() {
       .catch(() => undefined);
   }, [userId]);
 
-  const handleEvent = useCallback((event: BusinessAnalysisEvent) => {
-    setEvents((current) => [...current, event]);
-    if (event.type === "report_delta") setReport((current) => current + event.content);
-    if (event.type === "error") {
-      setError("经营分析没有完成，请查看执行过程或稍后重试。");
-      setPhase("failed");
-    }
-    if (event.type === "run_completed") setPhase("done");
-  }, []);
+  // 每来一个事件就贴底。用即时滚动而不是平滑滚动：流式阶段一秒可能滚十几次，
+  // 平滑滚动会让整段回答一直在动，读起来是抖的。
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ block: "end", behavior: "auto" });
+  }, [messages]);
+
+  const patchMessage = useCallback(
+    (id: string, update: (message: ChatMessage) => ChatMessage) => {
+      setMessages((current) =>
+        current.map((message) => (message.id === id ? update(message) : message)),
+      );
+    },
+    [],
+  );
 
   const submit = useCallback(async () => {
-    const message = question.trim();
-    if (!message || phase === "running") return;
+    const text = question.trim();
+    if (!text || phase === "running") return;
     abortRef.current?.abort();
     const controller = new AbortController();
     abortRef.current = controller;
+
+    const assistantId = crypto.randomUUID();
+    const thread = { ...activeThread, title: text.slice(0, 28), updatedAt: now() };
+
     setPhase("running");
-    setError(null);
-    setReport("");
-    setEvents([]);
-    setMessages((current) => [...current, { role: "user", content: message }]);
     setQuestion("");
-    const thread = { ...activeThread, title: message.slice(0, 28), updatedAt: new Date().toLocaleTimeString("zh-CN") };
     setActiveThread(thread);
-    setThreads((current) => [thread, ...current.filter((item) => item.id !== thread.id)]);
+    setThreads((current) => [
+      thread,
+      ...current.filter((item) => item.id !== thread.id),
+    ]);
+    setMessages((current) => [
+      ...current,
+      { id: crypto.randomUUID(), role: "user", content: text, status: "complete" },
+      {
+        id: assistantId,
+        role: "assistant",
+        content: "",
+        status: "streaming",
+        statusText: "正在理解你的问题…",
+      },
+    ]);
+
+    // 连接正常关闭不等于分析正常结束：中途断流时后端不会再发 run_completed，
+    // 不盯着这个标志就会把一条空回答当成成功留在页面上。
+    let completed = false;
     try {
       await runBusinessAnalysis(
-        { threadId: thread.id, message, userId },
+        { threadId: thread.id, message: text, userId },
         controller.signal,
-        handleEvent,
+        (event) => {
+          if (event.type === "run_completed") completed = true;
+          patchMessage(assistantId, (message) => reduceAssistantEvent(message, event));
+        },
       );
-      setMessages((current) => [...current, { role: "assistant", content: "分析任务已完成，请查看右侧报告。" }]);
-    } catch (requestError) {
-      if (isAbortError(requestError)) setPhase("cancelled");
-      else {
+      if (completed) {
+        setPhase("done");
+      } else {
+        patchMessage(assistantId, (message) => ({
+          ...message,
+          status: "error",
+          statusText: INCOMPLETE_STREAM_TEXT,
+        }));
         setPhase("failed");
-        setError(requestError instanceof Error ? requestError.message : "经营分析请求失败。");
+      }
+    } catch (requestError) {
+      if (completed) {
+        // run_completed 已经到了，报告是完整的；之后的连接抖动不改结论。
+        setPhase("done");
+      } else if (isAbortError(requestError)) {
+        patchMessage(assistantId, (message) => ({
+          ...message,
+          status: "cancelled",
+          statusText: CANCELLED_STATUS_TEXT,
+        }));
+        setPhase("cancelled");
+      } else {
+        // 错误事件已经带着具体原因写进消息了，这里只补 HTTP 层就没走到事件流的情况。
+        patchMessage(assistantId, (message) =>
+          message.status === "error"
+            ? message
+            : { ...message, status: "error", statusText: GENERIC_ERROR_TEXT },
+        );
+        setPhase("failed");
       }
     } finally {
       if (abortRef.current === controller) abortRef.current = null;
     }
-  }, [activeThread, handleEvent, phase, question, userId]);
+  }, [activeThread, patchMessage, phase, question, userId]);
 
-  const selectThread = useCallback(async (thread: Thread) => {
-    if (phase === "running") return;
-    setActiveThread(thread);
-    setMessages([]);
-    setEvents([]);
-    setReport("");
-    setError(null);
-    setPhase("idle");
-    try {
-      const runs = await loadAnalysisThread(thread.id);
-      if (runs.length > 0) {
-        const latest = runs[0];
-        const restoredReport = latest.report?.summary;
-        if (typeof restoredReport === "string" && restoredReport) setReport(restoredReport);
+  const selectThread = useCallback(
+    async (thread: Thread) => {
+      if (phase === "running") return;
+      abortRef.current?.abort();
+      const seq = (loadSeqRef.current += 1);
+      setActiveThread(thread);
+      setMessages([]);
+      setPhase("idle");
+      try {
+        const runs = await loadAnalysisThread(thread.id);
+        if (loadSeqRef.current !== seq) return;
+        setMessages(createMessagesFromRuns(runs));
+      } catch {
+        if (loadSeqRef.current !== seq) return;
         setMessages([
-          { role: "user", content: latest.title },
           {
+            id: crypto.randomUUID(),
             role: "assistant",
-            content: `已恢复该会话，共 ${runs.length} 次分析任务；最近一次状态：${latest.status}。`,
+            content: "",
+            status: "error",
+            statusText: "历史会话读取失败，请稍后重试。",
           },
         ]);
       }
-    } catch {
-      setError("历史会话读取失败，但仍可继续发起新的分析。");
-    }
-  }, [phase]);
+    },
+    [phase],
+  );
 
   const cancel = useCallback(() => abortRef.current?.abort(), []);
+
   const startNew = useCallback(() => {
     abortRef.current?.abort();
+    loadSeqRef.current += 1;
     setActiveThread(newThread());
     setMessages([]);
-    setEvents([]);
-    setReport("");
     setQuestion("");
-    setError(null);
     setPhase("idle");
   }, []);
 
+  const pickExample = useCallback((value: string) => {
+    setQuestion(value);
+    inputRef.current?.focus();
+  }, []);
+
   return (
-    <section className={styles.workspace} aria-label="AI 经营分析工作台">
+    <section className={styles.workspace} aria-label="AI 经营分析">
       <AnalysisThreadList
         threads={threads}
         activeId={activeThread.id}
+        busy={phase === "running"}
         onNew={startNew}
         onSelect={(thread) => void selectThread(thread)}
       />
-      <div className={styles.mainColumn}>
-        <div className={styles.promptCard}>
-          <label htmlFor="business-analysis-question">经营分析目标</label>
-          <textarea
-            id="business-analysis-question"
-            value={question}
-            onChange={(event) => setQuestion(event.target.value)}
-            onKeyDown={(event) => {
-              if ((event.ctrlKey || event.metaKey) && event.key === "Enter") void submit();
-            }}
-            placeholder="例如：分析华东第三季度销售下降原因，并结合促销规则给出建议"
-            rows={3}
-            disabled={phase === "running"}
-          />
-          <div className={styles.promptActions}>
-            <button type="button" onClick={() => void submit()} disabled={!question.trim() || phase === "running"}>
-              {phase === "running" ? "分析中…" : "开始分析"}
-            </button>
-            {phase === "running" ? <button type="button" className={styles.secondaryButton} onClick={cancel}>停止</button> : null}
-          </div>
-          <div className={styles.exampleRow}>
-            {EXAMPLES.map((example) => <button key={example} type="button" onClick={() => setQuestion(example)}>{example.slice(0, 18)}…</button>)}
-          </div>
-          <label className={styles.preferenceRow} htmlFor="business-analysis-region">
-            默认分析区域
-            <select
-              id="business-analysis-region"
-              value={preferredRegion}
-              disabled={phase === "running"}
-              onChange={(event) => {
-                const region = event.target.value;
-                setPreferredRegion(region);
-                setPreferenceHint(`已加载偏好：${region}`);
-                void saveUserPreference(userId, "preferred_region", region).catch(() => {
-                  setError("默认分析区域保存失败，本次分析不会受影响。");
-                });
-              }}
-            >
-              {["全国", "华东", "华南", "华北", "华中", "西南", "西北", "东北"].map((region) => (
-                <option key={region} value={region}>{region}</option>
-              ))}
-            </select>
-          </label>
+      <div className={styles.chatColumn}>
+        <header className={styles.chatHeader}>
+          <h1 className={styles.chatTitle}>AI 经营分析助手</h1>
+          <p className={styles.chatThreadTitle}>{activeThread.title}</p>
+        </header>
+        <div className={styles.chatScroll}>
+          {messages.length === 0 && phase !== "running" ? (
+            <Welcome onPick={pickExample} />
+          ) : null}
+          <AnalysisMessageList messages={messages} bottomRef={bottomRef} />
         </div>
-
-        {error ? <Notice tone="danger" tag="分析失败">{error}</Notice> : null}
-        {phase === "cancelled" ? <Notice tone="neutral" tag="已停止">本次分析已停止，可以修改问题后重新提交。</Notice> : null}
-        {messages.length === 0 && phase === "idle" ? <EmptyState title="还没有经营分析任务">输入一个需要多步拆解的业务问题，Agent 会自主调用数据和知识工具。</EmptyState> : null}
-        <AnalysisMessageList messages={messages} />
-        {report ? <AnalysisReportPanel report={report} /> : null}
+        <AnalysisComposer
+          value={question}
+          phase={phase}
+          inputRef={inputRef}
+          onChange={setQuestion}
+          onSend={() => void submit()}
+          onStop={cancel}
+        />
       </div>
-      <aside className={styles.sideColumn}>
-        <div className={styles.sideHeader}><span>Agent 执行过程</span><span className={styles.eventCount}>{events.length} 个事件</span></div>
-        <AnalysisEventTimeline events={events} />
-        <div className={styles.sideNote}>数据查询由现有安全问数工作流执行，知识规则来自 pgvector 知识库。{preferenceHint ? ` ${preferenceHint}` : ""}</div>
-      </aside>
     </section>
   );
 }

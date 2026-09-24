@@ -1,0 +1,137 @@
+/*
+ * Agent 回答的排版。
+ *
+ * 这是一份「宽版分析稿」——按文档阅读的节奏排，不套气泡。字号只用到 --text-lg，
+ * 因为回答里的一级标题不是页面标题，跟正文字号差太远会显得吵。
+ */
+
+.markdown {
+  font-size: var(--text-base);
+  line-height: var(--leading-relaxed);
+  color: var(--text);
+  /* 长英文串、URL、连续数字不该把消息区撑出横向滚动条。 */
+  overflow-wrap: anywhere;
+}
+
+.markdown > :first-child {
+  margin-top: 0;
+}
+
+.markdown > :last-child {
+  margin-bottom: 0;
+}
+
+.markdown h1,
+.markdown h2,
+.markdown h3,
+.markdown h4 {
+  margin: var(--space-5) 0 var(--space-2);
+  font-weight: var(--weight-semibold);
+  line-height: var(--leading-tight);
+}
+
+.markdown h1 {
+  font-size: var(--text-lg);
+}
+
+.markdown h2 {
+  font-size: var(--text-md);
+}
+
+.markdown h3,
+.markdown h4 {
+  font-size: var(--text-base);
+}
+
+.markdown p {
+  margin: var(--space-3) 0;
+}
+
+.markdown ul,
+.markdown ol {
+  margin: var(--space-3) 0;
+  padding-left: var(--space-5);
+  display: grid;
+  gap: var(--space-1);
+}
+
+.markdown li::marker {
+  color: var(--text-subtle);
+}
+
+.markdown strong {
+  font-weight: var(--weight-semibold);
+}
+
+.markdown blockquote {
+  margin: var(--space-3) 0;
+  padding: var(--space-2) var(--space-3);
+  border-left: 3px solid var(--primary-border);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  background: var(--surface-sunken);
+  color: var(--text-muted);
+}
+
+.markdown a {
+  color: var(--primary);
+  text-underline-offset: 2px;
+}
+
+.markdown hr {
+  margin: var(--space-5) 0;
+  border: 0;
+  border-top: 1px solid var(--border);
+}
+
+.markdown img {
+  max-width: 100%;
+  height: auto;
+}
+
+.markdown code {
+  padding: 1px 5px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--surface-sunken);
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+}
+
+.markdown pre {
+  margin: var(--space-3) 0;
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-sunken);
+  overflow-x: auto;
+}
+
+/* 代码块里的 code 已经在 pre 的框里了，再画一层就成双线。 */
+.markdown pre code {
+  padding: 0;
+  border: 0;
+  background: none;
+}
+
+.tableScroll {
+  margin: var(--space-3) 0;
+  overflow-x: auto;
+}
+
+.tableScroll table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--text-sm);
+}
+
+.tableScroll th,
+.tableScroll td {
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  text-align: left;
+}
+
+.tableScroll th {
+  background: var(--surface-muted);
+  font-weight: var(--weight-semibold);
+}
