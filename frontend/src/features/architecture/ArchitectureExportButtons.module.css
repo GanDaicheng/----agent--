@@ -27,3 +27,10 @@
 .actions button:focus-visible { outline: 3px solid #f59e0b; outline-offset: 3px; }
 .actions button:disabled { cursor: wait; opacity: 0.62; }
 
+.error {
+  flex-basis: 100%;
+  margin: 2px 0 0;
+  color: #b42318;
+  font-size: 12px;
+  line-height: 1.5;
+}

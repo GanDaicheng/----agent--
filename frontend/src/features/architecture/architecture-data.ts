@@ -551,7 +551,7 @@ const workflows: WorkflowDefinition[] = [
     lineStyle: "double",
     lineLabel: "双线 · Agent 决策流",
     nodeIds: ["model-services", "postgres", "hybrid-rag", "safe-sql", "agent-persistence", "langchain", "langgraph-query", "deep-agents", "sse-events", "fastapi", "nextjs", "app-business-analysis"],
-    edgeIds: ["models-langchain", "langchain-deep-agents", "postgres-memory", "memory-deep-agents", "rag-deep-agents", "query-graph-deep-agents", "deep-agents-sse", "sse-fastapi", "fastapi-nextjs", "nextjs-business-analysis"],
+    edgeIds: ["models-langchain", "langchain-deep-agents", "postgres-sql", "safe-query-graph", "postgres-memory", "memory-deep-agents", "rag-deep-agents", "query-graph-deep-agents", "deep-agents-sse", "sse-fastapi", "fastapi-nextjs", "nextjs-business-analysis"],
     steps: [
       { id: "analysis-objective", title: "接收经营目标", description: "加载用户目标、默认区域和长期偏好，形成当前分析上下文。", nodeIds: ["app-business-analysis", "agent-persistence"] },
       { id: "analysis-plan", title: "主管拆解任务", description: "Deep Agents 在 Agent Loop 中规划子任务并选择合适工具。", nodeIds: ["deep-agents", "langchain", "model-services"] },
@@ -578,12 +578,16 @@ export const ARCHITECTURE_MODEL: ArchitectureModel = {
 export function validateArchitecture(model: ArchitectureModel): string[] {
   const errors: string[] = [];
   const layerIds = new Set<string>();
+  const layerOrders = new Set<number>();
   const nodeIds = new Set<string>();
   const edgeIds = new Set<string>();
+  const workflowIds = new Set<string>();
 
   for (const layer of model.layers) {
     if (layerIds.has(layer.id)) errors.push(`Duplicate layer id: ${layer.id}`);
+    if (layerOrders.has(layer.order)) errors.push(`Duplicate layer order: ${layer.order}`);
     layerIds.add(layer.id);
+    layerOrders.add(layer.order);
   }
 
   for (const node of model.nodes) {
@@ -602,21 +606,49 @@ export function validateArchitecture(model: ArchitectureModel): string[] {
   }
 
   for (const workflow of model.workflows) {
+    if (workflowIds.has(workflow.id)) errors.push(`Duplicate workflow id: ${workflow.id}`);
+    workflowIds.add(workflow.id);
+    const workflowNodeIds = new Set(workflow.nodeIds);
+    const connectedNodeIds = new Set<string>();
+    const stepIds = new Set<string>();
+
     for (const nodeId of workflow.nodeIds) {
       if (!nodeIds.has(nodeId)) errors.push(`Unknown node ${nodeId} in workflow ${workflow.id}`);
     }
     for (const edgeId of workflow.edgeIds) {
-      if (!edgeIds.has(edgeId)) errors.push(`Unknown edge ${edgeId} in workflow ${workflow.id}`);
+      if (!edgeIds.has(edgeId)) {
+        errors.push(`Unknown edge ${edgeId} in workflow ${workflow.id}`);
+        continue;
+      }
+      const edge = model.edges.find((candidate) => candidate.id === edgeId);
+      if (!edge) continue;
+      if (!workflowNodeIds.has(edge.source) || !workflowNodeIds.has(edge.target)) {
+        errors.push(`Edge ${edgeId} leaves workflow ${workflow.id}`);
+        continue;
+      }
+      connectedNodeIds.add(edge.source);
+      connectedNodeIds.add(edge.target);
     }
     for (const step of workflow.steps) {
+      if (stepIds.has(step.id)) {
+        errors.push(`Duplicate step id ${step.id} in workflow ${workflow.id}`);
+      }
+      stepIds.add(step.id);
       for (const nodeId of step.nodeIds) {
         if (!nodeIds.has(nodeId)) {
           errors.push(`Unknown node ${nodeId} in workflow step ${step.id}`);
         }
+        if (!workflowNodeIds.has(nodeId)) {
+          errors.push(`Node ${nodeId} in step ${step.id} is not part of workflow ${workflow.id}`);
+        }
+      }
+    }
+    for (const nodeId of workflow.nodeIds) {
+      if (nodeIds.has(nodeId) && !connectedNodeIds.has(nodeId)) {
+        errors.push(`Node ${nodeId} is disconnected in workflow ${workflow.id}`);
       }
     }
   }
 
   return errors;
 }
-

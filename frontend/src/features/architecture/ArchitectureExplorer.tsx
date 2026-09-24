@@ -178,11 +178,23 @@ export function ArchitectureExplorer() {
                     className={active ? `${styles.edgeActive} ${lineStyleClass}` : styles.edgeMuted}
                     style={{ "--edge-color": highlight.workflow.color } as React.CSSProperties}
                   >
-                    <path
-                      d={edge.path}
-                      markerEnd={active ? "url(#architecture-arrow-active)" : "url(#architecture-arrow)"}
-                      markerStart={edge.direction === "bidirectional" ? (active ? "url(#architecture-arrow-active)" : "url(#architecture-arrow)") : undefined}
-                    />
+                    {active && highlight.workflow.lineStyle === "double" ? (
+                      <>
+                        <path d={edge.path} transform="translate(0 -2.5)" />
+                        <path
+                          d={edge.path}
+                          transform="translate(0 2.5)"
+                          markerEnd="url(#architecture-arrow-active)"
+                          markerStart={edge.direction === "bidirectional" ? "url(#architecture-arrow-active)" : undefined}
+                        />
+                      </>
+                    ) : (
+                      <path
+                        d={edge.path}
+                        markerEnd={active ? "url(#architecture-arrow-active)" : "url(#architecture-arrow)"}
+                        markerStart={edge.direction === "bidirectional" ? (active ? "url(#architecture-arrow-active)" : "url(#architecture-arrow)") : undefined}
+                      />
+                    )}
                     {active ? <text x={edge.labelX} y={edge.labelY}>{edge.label}</text> : null}
                   </g>
                 );

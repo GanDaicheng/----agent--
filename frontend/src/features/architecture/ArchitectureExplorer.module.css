@@ -173,7 +173,7 @@
 }
 
 .edgeDashed path { stroke-dasharray: 7 5; }
-.edgeDouble path { stroke-width: 4; stroke-dasharray: 14 3 2 3; }
+.edgeDouble path { stroke-width: 1.7; stroke-dasharray: none; }
 .edgeSolid path { stroke-dasharray: none; }
 
 .edgeActive text {

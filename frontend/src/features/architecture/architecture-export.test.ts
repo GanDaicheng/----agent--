@@ -25,9 +25,17 @@ describe("architecture interview export", () => {
     for (const boundary of ARCHITECTURE_MODEL.boundaries) expect(svg).toContain(boundary);
   });
 
+  it("encodes solid, dashed and double workflow lines distinctly", () => {
+    const svg = buildArchitectureSvg(ARCHITECTURE_MODEL);
+
+    expect(svg).toContain('data-line-style="solid"');
+    expect(svg).toContain('data-line-style="dashed"');
+    expect(svg).toContain('data-line-style="double"');
+    expect(svg.match(/data-line-style="double"/g)).toHaveLength(2);
+  });
+
   it("uses the fixed interview attachment filenames", () => {
     expect(ARCHITECTURE_SVG_FILENAME).toBe("ai-data-platform-architecture-current.svg");
     expect(ARCHITECTURE_PNG_FILENAME).toBe("ai-data-platform-architecture-current.png");
   });
 });
-

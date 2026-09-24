@@ -64,11 +64,14 @@ export function buildArchitectureSvg(model: ArchitectureModel): string {
   const workflowMarkup = model.workflows
     .map((workflow, index) => {
       const y = 744 + index * 68;
-      const dash = workflow.lineStyle === "dashed" ? 'stroke-dasharray="10 8"' : workflow.lineStyle === "double" ? 'stroke-width="5"' : 'stroke-width="3"';
+      const lineMarkup = workflow.lineStyle === "double"
+        ? `<line data-line-style="double" x1="54" y1="${y + 22}" x2="174" y2="${y + 22}" stroke="${workflow.color}" stroke-width="2"/>
+          <line data-line-style="double" x1="54" y1="${y + 30}" x2="174" y2="${y + 30}" stroke="${workflow.color}" stroke-width="2"/>`
+        : `<line data-line-style="${workflow.lineStyle}" x1="54" y1="${y + 26}" x2="174" y2="${y + 26}" stroke="${workflow.color}" stroke-width="3"${workflow.lineStyle === "dashed" ? ' stroke-dasharray="10 8"' : ""}/>`;
       const stepLabels = workflow.steps.map((step) => step.title).join(" → ");
       return `
         <g>
-          <line x1="54" y1="${y + 26}" x2="174" y2="${y + 26}" stroke="${workflow.color}" ${dash}/>
+          ${lineMarkup}
           <circle cx="54" cy="${y + 26}" r="6" fill="${workflow.color}"/>
           <text x="196" y="${y + 18}" class="workflow-title">${text(workflow.title)}</text>
           <text x="196" y="${y + 41}" class="workflow-steps">${text(stepLabels)}</text>
@@ -120,4 +123,3 @@ export function buildArchitectureSvg(model: ArchitectureModel): string {
   ${boundaryMarkup}
 </svg>`;
 }
-
