@@ -129,6 +129,12 @@ class Settings(BaseSettings):
     rerank_base_url: str = ""
     rerank_timeout_seconds: float = DEFAULT_RERANK_TIMEOUT_SECONDS
 
+    # 经营分析主管 Agent 的运行边界。它们是服务端硬限制，不能由请求体覆盖。
+    business_analysis_max_steps: int = 12
+    business_analysis_max_tool_calls: int = 8
+    business_analysis_run_timeout_seconds: int = 90
+    business_analysis_context_char_limit: int = 12000
+
     def require_database_url(self) -> str:
         """返回可用的异步连接串；缺失或驱动不对时抛出说明清楚的配置错误。
 
