@@ -40,7 +40,12 @@ from app.services.document_processors import (
 )
 from app.services.knowledge_catalog import list_documents
 from app.services.knowledge_ingestion import ingest_knowledge_document_from_content
-from app.services.knowledge_search import DEFAULT_TOP_K, MAX_TOP_K, MIN_TOP_K
+from app.services.knowledge_search import (
+    DEFAULT_TOP_K,
+    MAX_TOP_K,
+    MIN_TOP_K,
+    KnowledgeSearchError,
+)
 from app.services.rag_answer import answer_from_knowledge
 from app.services.safe_query import (
     MAX_SQL_LENGTH,
@@ -646,6 +651,17 @@ class RagSourceResponse(BaseModel):
     preview 是检索命中的切片正文摘要（后端截到 120 字），
     **不是模型生成的**——来源必须能追溯到库里真实存在的文字，
     用户才核对得了「这条来源到底写了什么」。正文为空时是空字符串。
+
+    ## distance / similarity 为什么可空
+
+    混合检索之后，一条来源完全可能只被**关键词**找到：它没有向量距离，
+    这两个字段就是 `null`。**不是 0**——0 的含义是「做过向量检索、
+    而且完全不相关」，那是另一回事。伪造一个 0 会让前端显示出
+    「相似度 0.0000」却排在前面，看的人只会更糊涂。
+
+    另外三个分数字段各自保留原本语义，任何情况下都不相加：
+    它们量纲不同（关键词分是序数、RRF 分是名次倒数、精排分是模型输出），
+    加起来没有意义。前端本阶段不展示它们，但接口先把数据留好。
     """
 
     source_file: str
@@ -653,8 +669,27 @@ class RagSourceResponse(BaseModel):
     section_title: str
     chunk_index: int
     preview: str
-    distance: float
-    similarity: float
+    distance: float | None
+    similarity: float | None
+    keyword_score: float | None = None
+    rrf_score: float | None = None
+    rerank_score: float | None = None
+
+
+class RagRetrievalSummaryResponse(BaseModel):
+    """本次检索的统计摘要。
+
+    只放计数与布尔值：不放改写后的问题、不放 keywords、不放候选正文、
+    不放向量、不放 Prompt、不放模型原始响应、不放内部主键。
+    它回答的是「这次检索干了什么」，不是「检索到了什么」——
+    后者在 sources 里。
+    """
+
+    query_rewritten: bool
+    query_count: int
+    candidates_considered: int
+    rerank_applied: bool
+    final_count: int
 
 
 class RagAnswerResponse(BaseModel):
@@ -671,11 +706,16 @@ class RagAnswerResponse(BaseModel):
     sources 是**本次检索命中的资料**，不是「模型确认引用过的资料」。
     后两种状态下一律为空：模型已经判定这些资料不足以作答，
     再列出来会让用户误以为它们就是依据。
+
+    retrieval 是本次检索的统计摘要（新增，向后兼容的可选字段）。
+    走旧检索路径时为 null——那条路没有改写、没有融合、没有精排，
+    编一份摘出来只会是一串看着像真的的假数字。
     """
 
     status: Literal["ok", "insufficient", "no_knowledge"]
     answer: str
     sources: list[RagSourceResponse]
+    retrieval: RagRetrievalSummaryResponse | None = None
 
 
 @router.post(
@@ -701,8 +741,12 @@ async def rag_answer(req: RagAnswerRequest) -> RagAnswerResponse:
     - 200：给出了回答，**包含 insufficient 和 no_knowledge**——
           那是一个安全的、可展示的业务结果，不是 HTTP 层故障。
     - 422：请求体不合法（缺 question、纯空白、top_k 越界）。
-    - 503：数据库/知识库连不上。
+    - 503：数据库连不上，**或者混合检索两路全部失败**——
+          两者对使用者是同一件事：知识库这次给不出候选。
     - 500：配置未就绪（模型或 embedding 的 Key 缺失），或其它内部异常。
+
+    错误映射只看**异常类型**，从不读异常消息去猜原因：
+    按消息文本分支的话，第三方库改一句文案就会让映射悄悄失效。
 
     错误响应只回显固定文案，绝不带问题原文、检索内容、连接串或异常原文。
     """
@@ -714,8 +758,13 @@ async def rag_answer(req: RagAnswerRequest) -> RagAnswerResponse:
         # 排查时完全不知道该补哪个变量。
         logger.warning("知识库问答配置未就绪：%s", exc)
         raise HTTPException(status_code=500, detail=RAG_UNAVAILABLE_DETAIL) from exc
-    except SQLAlchemyError as exc:
-        # 数据库类异常原文可能带着连接串（含密码），只记类型
+    except (SQLAlchemyError, KnowledgeSearchError) as exc:
+        # 数据库类异常原文可能带着连接串（含密码），只记类型。
+        #
+        # KnowledgeSearchError 也归到这里：它从混合检索里逃出来的唯一情形是
+        # 「两路召回全部失败」，对使用者就是「知识库这次不可用」。
+        # 它不可能是参数错误——候选上限来自已校验的配置，
+        # 每一路召回的宽度是模块默认值，都不是用户输入能碰到的。
         logger.warning("知识库不可用：%s", type(exc).__name__)
         raise HTTPException(
             status_code=503, detail=RAG_KNOWLEDGE_UNAVAILABLE_DETAIL
@@ -736,11 +785,27 @@ async def rag_answer(req: RagAnswerRequest) -> RagAnswerResponse:
                 section_title=source.section_title,
                 chunk_index=source.chunk_index,
                 preview=source.preview,
+                # 可能是 None：关键词独占的来源没有向量分数。
+                # 原样透传，不补 0——见 RagSourceResponse 的说明。
                 distance=source.distance,
                 similarity=source.similarity,
+                keyword_score=source.keyword_score,
+                rrf_score=source.rrf_score,
+                rerank_score=source.rerank_score,
             )
             for source in result.sources
         ],
+        retrieval=(
+            RagRetrievalSummaryResponse(
+                query_rewritten=result.retrieval.query_rewritten,
+                query_count=result.retrieval.query_count,
+                candidates_considered=result.retrieval.candidates_considered,
+                rerank_applied=result.retrieval.rerank_applied,
+                final_count=result.retrieval.final_count,
+            )
+            if result.retrieval is not None
+            else None
+        ),
     )
 
 

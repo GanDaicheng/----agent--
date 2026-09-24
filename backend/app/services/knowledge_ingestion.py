@@ -7,7 +7,7 @@
 | `ingest_knowledge(directory)` | 扫描目录下的 .md 文件 | 种子知识库同步（scripts/ingest_knowledge.py） |
 | `ingest_knowledge_document_from_content(...)` | 调用方直接给的文本 | 上传入库（md / txt） |
 
-两者只在「切片从哪来」上不同，之后的定计划、算向量、写库全部走
+两者只在「切片从哪来」上不同，之后的定计划、算向量、提元数据、写库全部走
 `_ingest_grouped_chunks`——同一段代码只写一遍。那些逻辑里每一句都带着
 踩过的坑（hash 要对 content_for_embedding 取、复用向量必须先比模型、
 删除必须在插入之前），复制一份就是让这些坑有第二次踩错的机会。
@@ -20,11 +20,11 @@
 
 每次运行都重新切片、重新和库里的状态比对，再决定每个文档要做什么：
 
-| 库里的情况 | 动作 | 是否调 embedding |
-| --- | --- | --- |
-| 没有这份文档 | insert | 全部切片都要算 |
-| 有，且整篇 hash 没变 | skip | **一次都不调** |
-| 有，但整篇 hash 变了 | update | **只算变了的切片** |
+| 库里的情况 | 动作 | 是否调 embedding | 是否调元数据模型 |
+| --- | --- | --- | --- |
+| 没有这份文档 | insert | 全部切片都要算 | 全部切片都要提 |
+| 有，且整篇 hash 没变 | skip | **一次都不调** | **一次都不调** |
+| 有，但整篇 hash 变了 | update | **只算变了的切片** | 全部切片都要提 |
 
 「整篇 hash」是把该文档所有切片的 content_hash 按顺序拼起来再取 sha256
 （见 document_content_hash）。**为什么不用文件文本的 sha256？** 在文件里
@@ -33,6 +33,10 @@
 （旧向量的 id 和 created_at 全被冲掉），而实际什么都没变。
 判定的对象应该是「要写进去的东西到底变没变」——那才是这张表关心的事。
 
+**元数据不参与任何 hash**：keywords / aliases / search_text 由模型生成，
+把它们算进 hash，模型的随机性会让同一份文档在「skip」和「update」之间反复横跳，
+每次都要重写整篇切片、重算向量。hash 只认内容，元数据只是内容的附属品。
+
 「只算变了的切片」靠 content_hash 反查：库里如果存在一条 content_hash 相同、
 且是**同一个 embedding 模型**算出来的向量，就直接复用它。
 同一个模型的判断不能省——换了模型之后，旧向量和新向量不在同一个语义空间里，
@@ -40,10 +44,10 @@
 
 ## 事务边界
 
-整个流程（读现状 → 定计划 → 算向量 → 写库）在**一个事务**里，
+整个流程（读现状 → 定计划 → 算向量 → 提元数据 → 写库）在**一个事务**里，
 所以要么全部成功，要么全部回滚，不会留下「文档写进去了、切片没有」的半截状态。
 
-代价要说清楚：embedding 是网络调用，而这个事务在调用期间一直开着。
+代价要说清楚：embedding 和元数据提取都是网络调用，而这个事务在调用期间一直开着。
 当前语料只有 5 个文档、44 个切片、5 次批量请求（约 3 秒），完全没问题。
 但如果语料涨到几百个文档、需要几十次请求，就该改成
 「先全部算完向量、再开事务写入」——那时要额外处理读与写之间别人改了库的情况。
@@ -60,7 +64,8 @@ Core 语句同样是全参数化的，不存在把文本拼进 SQL 的问题。
 """
 
 import hashlib
-from collections.abc import Awaitable, Callable, Sequence
+import logging
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -85,6 +90,11 @@ from app.services.knowledge_chunking import (
     load_knowledge_chunks,
     parse_document_text,
 )
+from app.services.knowledge_metadata import (
+    KnowledgeSearchMetadata,
+    build_base_search_text,
+    extract_search_metadata,
+)
 
 # 单次批量请求的切片条数。百炼 text-embedding-v4 的 input 数组有上限，
 # 取 10 是保守值：比逐条调用少 90% 的请求数，又不会因为超出上限被拒。
@@ -98,6 +108,13 @@ Action = Literal["insert", "skip", "update"]
 
 # embedding 服务的调用签名：一批文本 → (一批向量, 配置)
 Embedder = Callable[[Sequence[str]], Awaitable[tuple[list[list[float]], EmbeddingSettings]]]
+
+# 元数据提取的调用签名：一个切片 → 它的检索元数据。
+# 抽成「按切片」而不是「按三个字符串」，是为了让这个参数能被直接遍历计划注入——
+# 调用方（以及测试里的替身）只需要面对一个切片对象。
+MetadataExtractor = Callable[[KnowledgeChunk], Awaitable[KnowledgeSearchMetadata]]
+
+logger = logging.getLogger(__name__)
 
 
 # --------------------------------------------------------------------------
@@ -145,14 +162,37 @@ class DocumentPlan:
     def chunks_to_embed(self) -> tuple[KnowledgeChunk, ...]:
         return tuple(item.chunk for item in self.chunks if item.embedding is None)
 
+    @property
+    def chunks_to_write(self) -> tuple[KnowledgeChunk, ...]:
+        """这份文档要写进库的**全部**切片；skip 的计划是空的。
+
+        它与 chunks_to_embed 不是一回事：update 时有一部分切片的向量可以复用，
+        chunks_to_embed 只含需要重算的那些，但**所有**切片都要重新写进库
+        （update 是整体删掉重插），所以元数据必须为全部切片提取。
+
+        skip 的计划 chunks 为空，遍历这个属性的结果也是空——
+        「skip 的文档不调元数据模型」不是靠 if 判断保证的，
+        是靠 skip 的计划本来就没有切片。
+        """
+        return tuple(item.chunk for item in self.chunks)
+
 
 @dataclass(frozen=True)
 class ChunkRecord:
-    """真正要写进 knowledge_chunks 的一行。"""
+    """真正要写进 knowledge_chunks 的一行。
+
+    keywords / aliases / search_text 没有默认值：每一行都必须**明确**带上
+    它的检索元数据。给个空默认值的话，漏传元数据的后果是「静默写进一份空元数据」，
+    而空元数据和「提取过但确实没有关键词」在库里长得一模一样，
+    回填脚本会因此反复重跑。宁可在这里报错。
+    """
 
     chunk: KnowledgeChunk
     embedding: list[float]
     embedding_model: str
+    keywords: tuple[str, ...]
+    aliases: tuple[str, ...]
+    search_text: str
 
 
 @dataclass(frozen=True)
@@ -341,11 +381,17 @@ def attach_embeddings(
     plans: Sequence[DocumentPlan],
     fresh_vectors: Sequence[list[float]],
     embedding_model: str,
+    *,
+    metadata_by_chunk: Mapping[KnowledgeChunk, KnowledgeSearchMetadata],
 ) -> list[DocumentWrite]:
-    """把新旧向量合并成待写入的记录。
+    """把新旧向量和检索元数据合并成待写入的记录。
 
     fresh_vectors 的顺序必须与 pending_embedding_texts(plans) 一致——
     调用方按同一个顺序喂进去，这里按同样的顺序取出来。
+
+    metadata_by_chunk 必须覆盖每一份要写入的切片（见 chunks_to_write）。
+    缺一条就报错，不写一份空元数据顶上：缺元数据要么是调用方的 bug，
+    要么是提取环节漏了切片，两种情况都该当场暴露。
     """
     expected = sum(len(plan.chunks_to_embed) for plan in plans)
     if len(fresh_vectors) != expected:
@@ -373,11 +419,20 @@ def attach_embeddings(
                     f"期望 {EXPECTED_DIMENSION}，实际 {len(embedding)}。"
                 )
 
+            metadata = metadata_by_chunk.get(item.chunk)
+            if metadata is None:
+                raise ValueError(
+                    f"{plan.source_file} 第 {item.chunk.chunk_index} 个切片缺少检索元数据。"
+                )
+
             records.append(
                 ChunkRecord(
                     chunk=item.chunk,
                     embedding=embedding,
                     embedding_model=embedding_model,
+                    keywords=metadata.keywords,
+                    aliases=metadata.aliases,
+                    search_text=metadata.search_text,
                 )
             )
 
@@ -560,6 +615,12 @@ class PostgresKnowledgeStore:
                         "char_count": record.chunk.char_count,
                         "embedding": record.embedding,
                         "embedding_model": record.embedding_model,
+                        # 三列都是 JSONB / TEXT，非空。keywords 和 aliases 转成 list：
+                        # 元数据里存的是 tuple（不可变，避免被就地改），
+                        # 而 JSONB 要的是 JSON 数组，list 是它最直白的 Python 对应物。
+                        "keywords": list(record.keywords),
+                        "aliases": list(record.aliases),
+                        "search_text": record.search_text,
                     }
                     for record in write.records
                 ],
@@ -571,28 +632,98 @@ class PostgresKnowledgeStore:
 # --------------------------------------------------------------------------
 
 
+async def chunk_metadata_extractor(chunk: KnowledgeChunk) -> KnowledgeSearchMetadata:
+    """默认的元数据提取器：把一个切片拆成三个字符串交给提取服务。
+
+    存在的意义只是「改一下形状」：提取服务面对的是标题和正文（它不该知道
+    切片这个概念），而入库流程手里只有一个切片对象。中间垫一层，
+    两边都不必迁就对方。
+
+    注意传的是 chunk.content 而不是 content_for_embedding：
+    content_for_embedding 是「标题 + 正文」的拼装版，标题会被重复送一遍，
+    而 search_text 里标题本来就有自己的位置。
+    """
+    return await extract_search_metadata(
+        chunk.document_title,
+        chunk.section_title,
+        chunk.content,
+    )
+
+
+def _degraded_metadata(chunk: KnowledgeChunk) -> KnowledgeSearchMetadata:
+    """提取不了时的兜底元数据：没有关键词，search_text 只有标题和正文。"""
+    return KnowledgeSearchMetadata(
+        keywords=(),
+        aliases=(),
+        search_text=build_base_search_text(
+            chunk.document_title, chunk.section_title, chunk.content
+        ),
+        extraction_succeeded=False,
+    )
+
+
+async def _extract_metadata(
+    plans: Sequence[DocumentPlan],
+    *,
+    extractor: MetadataExtractor,
+) -> dict[KnowledgeChunk, KnowledgeSearchMetadata]:
+    """为所有**将要写入**的切片提取元数据。
+
+    遍历的是 plan.chunks_to_write：skip 的计划没有切片，所以遍历它
+    天然不会产生任何调用，「skip 不调模型」不需要额外判断。
+
+    每个切片一次调用，不去重：内容相同的切片在同一个文档里不可能出现
+    （chunk_index 唯一），跨文档去重则会让调用次数随内容分布变化，
+    既难预测也难测试，省下的那点钱不值得这份复杂度。
+
+    这里**再包一层异常处理**是有意的。extract_search_metadata 自己已经会对
+    模型失败降级，但还有两种情况它管不了：输入为空（那是断言调用方的 bug）
+    和调用方注入了别的提取器。检索元数据不该让一次文档上传失败，
+    所以这一层的原则是：任何异常都变成「这份切片没有元数据」，入库继续。
+    """
+    metadata_by_chunk: dict[KnowledgeChunk, KnowledgeSearchMetadata] = {}
+
+    for plan in plans:
+        for chunk in plan.chunks_to_write:
+            try:
+                metadata_by_chunk[chunk] = await extractor(chunk)
+            except Exception as error:  # noqa: BLE001
+                # 只记异常类名；不记正文、不记 Prompt、不记模型响应，也不记密钥。
+                logger.warning(
+                    "切片元数据提取失败，本次只写入标题与正文：%s", type(error).__name__
+                )
+                metadata_by_chunk[chunk] = _degraded_metadata(chunk)
+
+    return metadata_by_chunk
+
+
 async def ingest_knowledge(
     directory: Path,
     *,
     store: KnowledgeStore,
     embedder: Embedder = embed_texts,
+    metadata_extractor: MetadataExtractor = chunk_metadata_extractor,
     embedding_model: str | None = None,
     batch_size: int = EMBEDDING_BATCH_SIZE,
     dry_run: bool = False,
 ) -> IngestSummary:
     """把一个目录下的 Markdown 文档同步进知识库。
 
-    dry_run=True 时只算计划、不调 embedding、不写库——用来在真正花钱之前
+    dry_run=True 时只算计划、不调 embedding、不提元数据、不写库——用来在真正花钱之前
     确认「这次会插几行、会重算几条向量」。
 
     这是「目录同步」这条入口，保持原有签名不变；它只负责**取切片**，
     剩下的活全交给 _ingest_grouped_chunks —— 和单份文档入库走的是同一段逻辑。
+
+    metadata_extractor 的默认值和 embedder 一样指向生产实现，测试通过注入替身
+    来断掉网络——这样「默认就是真的」，不会出现「上线忘了接线」。
     """
     chunks = load_knowledge_chunks(directory)
     _, summary = await _ingest_grouped_chunks(
         group_chunks_by_source_file(chunks),
         store=store,
         embedder=embedder,
+        metadata_extractor=metadata_extractor,
         embedding_model=embedding_model,
         batch_size=batch_size,
         dry_run=dry_run,
@@ -605,11 +736,12 @@ async def _ingest_grouped_chunks(
     *,
     store: KnowledgeStore,
     embedder: Embedder,
+    metadata_extractor: MetadataExtractor,
     embedding_model: str | None,
     batch_size: int,
     dry_run: bool,
 ) -> tuple[list[DocumentPlan], IngestSummary]:
-    """入库的**核心**：定计划 → 算向量 → 写库，返回 (计划, 汇总)。
+    """入库的**核心**：定计划 → 算向量 → 提元数据 → 写库，返回 (计划, 汇总)。
 
     两个入口（目录同步、单份文档）共用这一段，差别只在「切片从哪来」。
     抽出来而不是让单份文档那条路自己再实现一遍，是因为这里面每一句都带着
@@ -618,6 +750,10 @@ async def _ingest_grouped_chunks(
 
     返回 plans 是为了让调用方能拿到「这一份文档是什么 action」——
     汇总里只有一个计数，而单份入库需要知道具体是 insert / update / skip。
+
+    **embedding 排在元数据之前**：embedding 更容易失败（网络、配额、维度），
+    先做它，失败时一次元数据调用都不会发生，白花的钱更少。
+    两者都在同一个事务里，任一失败都会整体回滚，顺序不影响一致性。
     """
     started = datetime.now(timezone.utc)
 
@@ -635,7 +771,13 @@ async def _ingest_grouped_chunks(
 
     if not dry_run:
         fresh_vectors = await _embed_pending(plans, embedder=embedder, batch_size=batch_size)
-        writes = attach_embeddings(plans, fresh_vectors, embedding_model)
+        metadata_by_chunk = await _extract_metadata(plans, extractor=metadata_extractor)
+        writes = attach_embeddings(
+            plans,
+            fresh_vectors,
+            embedding_model,
+            metadata_by_chunk=metadata_by_chunk,
+        )
         await store.apply(writes)
 
     elapsed = (datetime.now(timezone.utc) - started).total_seconds()
@@ -673,6 +815,7 @@ async def ingest_knowledge_document_from_content(
     title: str | None = None,
     store: KnowledgeStore | None = None,
     embedder: Embedder = embed_texts,
+    metadata_extractor: MetadataExtractor = chunk_metadata_extractor,
     embedding_model: str | None = None,
     batch_size: int = EMBEDDING_BATCH_SIZE,
     dry_run: bool = False,
@@ -722,6 +865,7 @@ async def ingest_knowledge_document_from_content(
             grouped,
             store=active_store,
             embedder=embedder,
+            metadata_extractor=metadata_extractor,
             embedding_model=embedding_model,
             batch_size=batch_size,
             dry_run=dry_run,

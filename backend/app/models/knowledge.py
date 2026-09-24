@@ -19,6 +19,20 @@
 维度固定 1024，与 EMBEDDING_DIMENSION（text-embedding-v4 的 1024 档）以及
 `vector(1024)` 三处必须一致。测试 test_model_dimension_matches_configured_embedding_dimension
 会在 .env 被改歪时报错。
+
+## 检索元数据：keywords / aliases / search_text
+
+这三列是给混合检索准备的，**本阶段只建字段，还没有任何代码往里写**：
+
+- `keywords`：从切片里提取的关键术语（概念名、指标名、字段名……）；
+- `aliases`：同一概念的其他说法，包括口语表达；
+- `search_text`：关键词检索的统一文本 = 文档标题 + 小节标题 + 正文。
+
+`search_text` 单独存成一列，而不是检索时现拼：GIN trigram 索引只能建在真实的列上，
+而且它必须稳定——每次拼出来的顺序或分隔符一变，索引就白建了。
+
+三列都带 server default（`[]` / `[]` / `''`），因为在本阶段入库代码还不会主动写它们，
+新切片只能靠数据库默认值兜住。下一阶段接入元数据提取后再由代码显式写入。
 """
 
 from datetime import datetime
@@ -28,12 +42,15 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     String,
     Text,
     UniqueConstraint,
     func,
+    text,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.types import UserDefinedType
 
@@ -45,6 +62,15 @@ KNOWLEDGE_EMBEDDING_DIMENSIONS = 1024
 
 # content_hash 是 sha256 的十六进制串，固定 64 个字符
 CONTENT_HASH_LENGTH = 64
+
+# search_text 的 GIN trigram 索引名。写成模块常量而不是就地写字面量：
+# 迁移文件里也会建这个索引，两处必须同名，否则 autogenerate 会认为索引丢了又再建一个。
+SEARCH_TEXT_TRGM_INDEX = "ix_knowledge_chunks_search_text_trgm"
+
+# JSONB 空数组的数据库默认值。**必须带 ::jsonb 转换**：不写的话
+# `DEFAULT '[]'` 在 jsonb 列上虽然也能转成空数组，但字面量本身是个字符串，
+# 一旦有人照着写成 '"[]"'，存进去的就成了 JSON 字符串而不是数组。
+EMPTY_JSONB_ARRAY = text("'[]'::jsonb")
 
 
 class Vector(UserDefinedType):
@@ -146,6 +172,17 @@ class KnowledgeChunk(Base):
         UniqueConstraint("document_id", "chunk_index"),
         # content_hash 刻意不做全局唯一：不同文档完全可能有一模一样的说明片段，
         # 全局唯一会让后入库的那条直接失败。去重策略留给后续，不在这里做强约束。
+        # search_text 的模糊匹配索引。用 gin_trgm_ops 而不是默认的 B-tree：
+        # B-tree 只能做前缀匹配，而关键词可能出现在正文的任意位置；
+        # trigram 把文本切成三元组，让「包含」这类查询也能走索引。
+        # 索引写进模型而不是只写在迁移里，是为了让 Base.metadata 与真实库一致——
+        # 否则以后 autogenerate 会发现「库里有这个索引、模型里没有」，进而生成一条删它的迁移。
+        Index(
+            SEARCH_TEXT_TRGM_INDEX,
+            "search_text",
+            postgresql_using="gin",
+            postgresql_ops={"search_text": "gin_trgm_ops"},
+        ),
         {"comment": "知识切片表：embedding 可空，支持先落文本后补向量"},
     )
 
@@ -179,6 +216,25 @@ class KnowledgeChunk(Base):
     # 记录这条向量是哪个模型算的。将来换 embedding 模型时，
     # 靠它能精确找出「需要重算」的行，而不是全表重嵌。
     embedding_model: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+    # --- 检索元数据：本阶段只建字段，还没有代码写入 ---
+    # 用 JSONB 而不是 JSON：JSONB 解析后存储，支持 GIN 索引和包含查询，
+    # 这两点正是后续关键词/同义词召回要用的；JSON 每次都当字符串存，两者都用不上。
+    #
+    # 默认值必须写 default=list 而不是 default=[]：后者是**一个**列表对象，
+    # 所有 ORM 实例会共享同一个，往一条切片上 append 会连带改掉另一条。
+    # default 只在 ORM 侧生效（Core 的 insert 不经过它），所以两处都要给默认值。
+    keywords: Mapped[list[str]] = mapped_column(
+        JSONB, nullable=False, default=list, server_default=EMPTY_JSONB_ARRAY
+    )
+    aliases: Mapped[list[str]] = mapped_column(
+        JSONB, nullable=False, default=list, server_default=EMPTY_JSONB_ARRAY
+    )
+    # 关键词检索的统一文本，内容与顺序固定为：文档标题 + 换行 + 小节标题 + 换行 + 正文。
+    # 不含 keywords / aliases：那两列本阶段还是空的，等元数据提取接入后再统一重建。
+    search_text: Mapped[str] = mapped_column(
+        Text, nullable=False, default="", server_default=text("''")
+    )
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()

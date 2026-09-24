@@ -342,6 +342,148 @@
   color: var(--text);
 }
 
+/* 命中方式（向量/关键词/混合）与精排状态：小型文本标签。
+   含义由文字承担，所以不配色、不画图标——也不用红黄绿暗示好坏。 */
+.tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.tag {
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  padding: 0 var(--space-2);
+}
+
+/* 原始排序分数：次级信息，等宽小字。
+   只并列罗列，不做条状图、不做高低配色——这几个分数量纲不同，
+   并排画成长短不一的条会让人以为可以直接比长短。 */
+.scores {
+  margin: var(--space-2) 0 0;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--text-subtle);
+}
+
+/* ---------------------------- 检索过程摘要 ---------------------------- */
+
+/*
+ * 默认收起：它解释的是「系统怎么筛的」，属于过程核对信息，
+ * 视觉层级必须低于回答正文和原文预览。
+ */
+.retrieval {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-muted);
+}
+
+.retrievalSummary {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  /* 整行都能点，点击区域足够大 */
+  padding: var(--space-3) var(--space-4);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  color: var(--text);
+  cursor: pointer;
+  /* 去掉浏览器默认的三角，换成下面那个随状态变形的文字标记 */
+  list-style: none;
+}
+
+.retrievalSummary::-webkit-details-marker {
+  display: none;
+}
+
+/* 展开状态不只靠颜色表达：标记的形状本身在变 */
+.retrievalSummary::before {
+  content: "▸";
+  flex: none;
+  color: var(--text-muted);
+}
+
+.retrieval[open] > .retrievalSummary::before {
+  content: "▾";
+}
+
+.retrieval[open] > .retrievalSummary {
+  border-bottom: 1px solid var(--border);
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+}
+
+.retrievalSummary:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
+.retrievalBody {
+  padding: var(--space-4);
+}
+
+.retrievalNote {
+  margin: 0 0 var(--space-4);
+  font-size: var(--text-xs);
+  line-height: var(--leading-relaxed);
+  color: var(--text-muted);
+}
+
+/*
+ * 检索流水线：五个步骤排成一条紧凑的横向流程。
+ *
+ * 用 flex + 换行而不是固定五列：窄屏时它会自己折成两行，
+ * 不会把卡片撑出横向滚动。
+ */
+.pipeline {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3) var(--space-4);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.step {
+  position: relative;
+  flex: 1 1 104px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.stepLabel {
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+
+.stepValue {
+  font-size: var(--text-sm);
+  color: var(--text);
+  /* 长文案（比如「未执行，沿用融合排序」）要能换行，不能撑破 */
+  overflow-wrap: anywhere;
+}
+
+/*
+ * 只有在宽屏、五个步骤确实排得成一行时才画连接线。
+ * 折行之后还留着一段悬空的线，比不画更乱——这也是为什么
+ * 断点取得比「刚好放得下」更宽一些。
+ */
+@media (min-width: 900px) {
+  .step:not(:last-child)::after {
+    content: "";
+    position: absolute;
+    /* 连的是「步骤名」那一行，不是整块的中点 */
+    top: var(--space-2);
+    right: calc(var(--space-4) / -2);
+    width: var(--space-4);
+    height: 1px;
+    background: var(--border-strong);
+  }
+}
+
 /* 窄屏：相似度的横条换行，不要挤在一行里 */
 @media (max-width: 560px) {
   .similarity {

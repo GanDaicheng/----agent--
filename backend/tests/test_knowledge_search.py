@@ -30,8 +30,11 @@ from app.services.knowledge_search import (
     MAX_TOP_K,
     MIN_TOP_K,
     SEARCH_SQL,
+    ChunkContent,
     KnowledgeSearchError,
+    build_chunk_content,
     build_search_result,
+    connection_scope,
     count_searchable_chunks,
     normalize_query,
     search_knowledge,
@@ -44,6 +47,17 @@ BACKEND_DIR = pathlib.Path(__file__).resolve().parents[1]
 SEARCH_SCRIPT = BACKEND_DIR / "scripts" / "smoke_knowledge_search.py"
 
 FAKE_KEY = "sk-fake-search-key-for-tests-0123456789"
+
+# 禁止出现在生产代码里的具体业务领域词（测试数据里可以用）
+FORBIDDEN_DOMAIN_TERMS = (
+    "客单价",
+    "销售额",
+    "会员",
+    "复购率",
+    "华东",
+    "黑金会员",
+    "年底旺季",
+)
 
 
 # --------------------------------------------------------------------------
@@ -548,3 +562,140 @@ def test_script_preview_flattens_newlines():
     script = load_search_script()
 
     assert "\n" not in script.preview("第一行\n\n第二行")
+
+
+# ==========================================================================
+# 召回链路的公共底座（RAG-13.4）
+#
+# 这一节守住两件事：
+# 1. 向量召回这一路的行为**一点没变**——它已经被 RAG 回答服务和大量测试依赖；
+# 2. 新抽出来的共享类型只做加法，不往里面塞任何不属于它的分数。
+# ==========================================================================
+
+
+def test_chunk_property_mirrors_the_flat_fields():
+    result = build_search_result(make_row(chunk_id=42, document_id=7, distance=0.25))
+
+    chunk = result.chunk
+
+    assert isinstance(chunk, ChunkContent)
+    assert chunk.chunk_id == result.chunk_id
+    assert chunk.document_id == result.document_id
+    assert chunk.source_file == result.source_file
+    assert chunk.document_title == result.document_title
+    assert chunk.section_title == result.section_title
+    assert chunk.chunk_index == result.chunk_index
+    assert chunk.content == result.content
+    assert chunk.embedding_model == result.embedding_model
+
+
+def test_chunk_content_carries_no_scores():
+    """★ 公共内容里不该有任何分数。
+
+    带上 distance 的话，关键词召回就得为它编一个值——
+    而那正是这次特意分开两种结果类型要避免的事。
+    """
+    chunk = build_search_result(make_row(chunk_id=1, distance=0.25)).chunk
+
+    for forbidden in ("distance", "similarity", "keyword_score", "rrf_score"):
+        assert not hasattr(chunk, forbidden), f"公共内容里不该有 {forbidden}"
+
+
+def test_build_chunk_content_maps_every_column():
+    row = make_row(
+        chunk_id=42,
+        document_id=7,
+        source_file="规范.md",
+        section_title="小节甲",
+        chunk_index=5,
+        content="正文乙。",
+        embedding_model="text-embedding-v4",
+        distance=0.1,
+    )
+
+    chunk = build_chunk_content(row)
+
+    assert chunk.chunk_id == 42
+    assert chunk.document_id == 7
+    assert chunk.source_file == "规范.md"
+    assert chunk.document_title == "零售核心指标口径说明"
+    assert chunk.section_title == "小节甲"
+    assert chunk.chunk_index == 5
+    assert chunk.content == "正文乙。"
+    assert chunk.embedding_model == "text-embedding-v4"
+
+
+def test_chunk_content_is_frozen_and_hashable():
+    """不可变：融合层会把它放进字典当键，可变对象做键会出问题。"""
+    chunk = build_search_result(make_row(chunk_id=1, distance=0.1)).chunk
+
+    assert hash(chunk) is not None
+    with pytest.raises(Exception):
+        chunk.chunk_id = 999
+
+
+def test_build_search_result_keeps_deriving_similarity_from_distance():
+    """回归：抽出公共映射之后，distance / similarity 的语义没变。"""
+    result = build_search_result(make_row(chunk_id=1, distance=0.25))
+
+    assert result.distance == pytest.approx(0.25)
+    assert result.similarity == pytest.approx(0.75)
+    assert "distance" not in result.chunk.__dataclass_fields__
+
+
+def test_search_knowledge_result_shape_is_unchanged():
+    """★ 向量召回的对外结果一个字段都不能少。
+
+    RAG 回答服务和它的测试都按这些字段名取值，少一个就是线上事故。
+    """
+    results, _, _ = asyncio.run(run_search("客单价", rows=[make_row(chunk_id=1, distance=0.2)]))
+
+    result = results[0]
+    for field in (
+        "chunk_id",
+        "document_id",
+        "source_file",
+        "document_title",
+        "section_title",
+        "chunk_index",
+        "content",
+        "embedding_model",
+        "distance",
+        "similarity",
+    ):
+        assert hasattr(result, field), field
+
+
+def test_search_knowledge_still_validates_its_arguments():
+    """回归：原有校验没有被这次重构绕过。"""
+    with pytest.raises(KnowledgeSearchError):
+        asyncio.run(search_knowledge("   ", connection=FakeSearchConnection()))
+
+    with pytest.raises(KnowledgeSearchError):
+        asyncio.run(search_knowledge("问题", top_k=0, connection=FakeSearchConnection()))
+
+
+def test_connection_scope_hands_back_the_injected_connection():
+    """公共的借连接规则：注入什么就给什么，不偷偷去连真库。"""
+    injected = FakeSearchConnection()
+
+    async def use():
+        async with connection_scope(injected) as active:
+            return active
+
+    assert asyncio.run(use()) is injected
+
+
+def test_connection_scope_is_shared_not_duplicated():
+    """两个召回器必须用同一个借连接规则，否则测试注入只会对一路生效。"""
+    source = pathlib.Path(knowledge_search.__file__).read_text(encoding="utf-8")
+
+    assert "async def connection_scope" in source
+    assert "_connection_scope" not in source  # 旧的私有名字不该留下副本
+
+
+@pytest.mark.parametrize("term", FORBIDDEN_DOMAIN_TERMS)
+def test_module_has_no_hardcoded_domain_vocabulary(term):
+    source = pathlib.Path(knowledge_search.__file__).read_text(encoding="utf-8")
+
+    assert term not in source

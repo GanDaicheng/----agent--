@@ -34,7 +34,16 @@ SQL 里出现的是向量和 top_k 两个绑定参数。所以这里不存在 SQ
 在这个量级上不但省不了多少时间，还可能漏掉真正的最近邻。
 等切片上千再补一个迁移建索引，检索代码不用改。
 
-本模块不调用 LLM、不生成回答、不写任何数据。
+## 本模块在召回链路里的位置
+
+这里是**向量召回**那一路，同时也是召回链路的公共底座：
+
+- `ChunkContent`：两路召回命中的「同一段切片」，只描述内容、不带分数；
+- `connection_scope`：两个召回器共用的借连接规则（测试注入才只对一路生效）；
+- `KnowledgeSearchError`：整条链路共用的受控异常。
+
+关键词召回（knowledge_keyword_search）与候选融合（retrieval_fusion）建在这之上。
+本模块不调用 LLM、不生成回答、不写任何数据、不做候选融合。
 """
 
 from collections.abc import Awaitable, Callable, Mapping, Sequence
@@ -89,12 +98,44 @@ class KnowledgeSearchError(AppError):
 
 
 @dataclass(frozen=True)
+class ChunkContent:
+    """一份切片的**内容部分**，不含任何"分数"。
+
+    这是召回链路上的公共货币：向量召回和关键词召回命中的是同一种东西
+    （一段切片），只是各自附带不同的分数。把公共字段抽出来单独定义，
+    有三个具体的好处：
+
+    1. 融合层只需要认一种类型，不必为两路各写一套取属性的代码；
+    2. 「同一个 chunk_id 只能出现一次」这条规则在类型上就说得通——
+       两路命中的确实是同一个对象；
+    3. 分数各归各的：向量距离留在 KnowledgeSearchResult 上，
+       关键词分数留在 KeywordSearchResult 上，谁都不会被伪造。
+
+    为什么不直接复用 KnowledgeSearchResult？因为它的 distance / similarity
+    是**向量召回专有**的量。关键词命中根本没有向量距离，硬塞 0 或 1 进去，
+    下游任何一处拿它做判断都会得到一个看起来合法、实际毫无意义的数。
+    """
+
+    chunk_id: int
+    document_id: int
+    source_file: str
+    document_title: str
+    section_title: str
+    chunk_index: int
+    content: str
+    embedding_model: str | None
+
+
+@dataclass(frozen=True)
 class KnowledgeSearchResult:
-    """一条检索结果。
+    """一条**向量**检索结果。
 
     content 是给人看、要交给 LLM 的正文；content_for_embedding **不返回**——
     那是算向量用的文本（带标题前缀的副本），对生成回答没有额外价值，
     带上只会让上下文里出现两份近似内容。
+
+    distance / similarity 是向量召回专有的量，没有默认值：
+    这个类型只该由向量召回产出。关键词召回有自己的结果类型。
     """
 
     chunk_id: int
@@ -107,6 +148,25 @@ class KnowledgeSearchResult:
     embedding_model: str | None
     distance: float
     similarity: float
+
+    @property
+    def chunk(self) -> ChunkContent:
+        """这份切片的内容部分，供融合层统一取用。
+
+        做成属性而不是改字段：KnowledgeSearchResult 已经被 RAG 回答服务
+        和大量测试按现有关键字参数构造，改构造签名等于把那些调用点全打翻。
+        加一个只读属性既能给融合层一个统一入口，又不动任何既有行为。
+        """
+        return ChunkContent(
+            chunk_id=self.chunk_id,
+            document_id=self.document_id,
+            source_file=self.source_file,
+            document_title=self.document_title,
+            section_title=self.section_title,
+            chunk_index=self.chunk_index,
+            content=self.content,
+            embedding_model=self.embedding_model,
+        )
 
 
 # --------------------------------------------------------------------------
@@ -175,10 +235,14 @@ def similarity_from_distance(distance: float) -> float:
     return 1.0 - distance
 
 
-def build_search_result(row: Mapping[str, Any]) -> KnowledgeSearchResult:
-    """把一行查询结果映射成结果对象。"""
-    distance = float(row["distance"])
-    return KnowledgeSearchResult(
+def build_chunk_content(row: Mapping[str, Any]) -> ChunkContent:
+    """把一行查询结果映射成切片内容。
+
+    向量召回和关键词召回的 SQL 选的是同一批列，所以共用这一个映射函数：
+    两处各写一份，迟早会在某次加字段时漏掉一边，而漏掉的那一边
+    只会表现为「某个字段莫名其妙是空的」。
+    """
+    return ChunkContent(
         chunk_id=int(row["chunk_id"]),
         document_id=int(row["document_id"]),
         source_file=str(row["source_file"]),
@@ -187,6 +251,22 @@ def build_search_result(row: Mapping[str, Any]) -> KnowledgeSearchResult:
         chunk_index=int(row["chunk_index"]),
         content=str(row["content"]),
         embedding_model=row["embedding_model"],
+    )
+
+
+def build_search_result(row: Mapping[str, Any]) -> KnowledgeSearchResult:
+    """把一行查询结果映射成**向量**检索结果。"""
+    distance = float(row["distance"])
+    content = build_chunk_content(row)
+    return KnowledgeSearchResult(
+        chunk_id=content.chunk_id,
+        document_id=content.document_id,
+        source_file=content.source_file,
+        document_title=content.document_title,
+        section_title=content.section_title,
+        chunk_index=content.chunk_index,
+        content=content.content,
+        embedding_model=content.embedding_model,
         distance=distance,
         similarity=similarity_from_distance(distance),
     )
@@ -198,8 +278,12 @@ def build_search_result(row: Mapping[str, Any]) -> KnowledgeSearchResult:
 
 
 @asynccontextmanager
-async def _connection_scope(connection: AsyncConnection | None):
-    """有外部连接就用外部的（测试注入用），没有再自己借一条。"""
+async def connection_scope(connection: AsyncConnection | None):
+    """有外部连接就用外部的（测试注入用），没有再自己借一条。
+
+    公开出去给关键词召回共用：两个召回器必须用同一个「借连接」规则，
+    否则测试注入 connection 时只对其中一路生效，另一路会偷偷去连真库。
+    """
     if connection is not None:
         yield connection
         return
@@ -218,6 +302,9 @@ async def search_knowledge(
 
     embedder 与 connection 都可注入，测试因此不必调真实 embedding 接口、
     也不必连数据库。
+
+    这是**向量召回**那一路，行为保持不变：候选融合（关键词召回、RRF）
+    由 knowledge_keyword_search / retrieval_fusion 负责，不在这里做。
     """
     normalized = normalize_query(query)
     limit = validate_top_k(top_k)
@@ -225,7 +312,7 @@ async def search_knowledge(
     vector, _ = await embedder(normalized)
     literal = to_pgvector_literal(vector)
 
-    async with _connection_scope(connection) as active:
+    async with connection_scope(connection) as active:
         rows = (
             await active.execute(
                 SEARCH_SQL,
@@ -242,7 +329,7 @@ async def count_searchable_chunks(*, connection: AsyncConnection | None = None) 
     smoke 脚本用它区分「检索没召回」和「知识库压根是空的」——
     这两种情况的处理方式完全不同，混成一个「没有结果」很难排查。
     """
-    async with _connection_scope(connection) as active:
+    async with connection_scope(connection) as active:
         count = await active.scalar(
             text("SELECT COUNT(*) FROM knowledge_chunks WHERE embedding IS NOT NULL")
         )

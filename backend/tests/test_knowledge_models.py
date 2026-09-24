@@ -16,13 +16,15 @@ import ast
 import pathlib
 
 import pytest
-from sqlalchemy import BigInteger, UniqueConstraint
+from sqlalchemy import BigInteger, Text, UniqueConstraint
+from sqlalchemy.dialects.postgresql import JSONB
 
 from app.core.config import get_settings
 from app.models import Base
 from app.models.knowledge import (
     CONTENT_HASH_LENGTH,
     KNOWLEDGE_EMBEDDING_DIMENSIONS,
+    SEARCH_TEXT_TRGM_INDEX,
     KnowledgeChunk,
     KnowledgeDocument,
     Vector,
@@ -32,9 +34,16 @@ BACKEND_DIR = pathlib.Path(__file__).resolve().parents[1]
 ALEMBIC_INI = BACKEND_DIR / "alembic.ini"
 VERSIONS_DIR = BACKEND_DIR / "alembic" / "versions"
 
-NEW_REVISION = "69e6c2579c1b"
-PREVIOUS_REVISION = "e205344666e8"
-NEW_MIGRATION_FILE = VERSIONS_DIR / f"{NEW_REVISION}_create_knowledge_base_schema.py"
+# 建知识库两张表的迁移（本文件大部分断言针对它）
+KNOWLEDGE_SCHEMA_REVISION = "69e6c2579c1b"
+KNOWLEDGE_SCHEMA_MIGRATION_FILE = (
+    VERSIONS_DIR / f"{KNOWLEDGE_SCHEMA_REVISION}_create_knowledge_base_schema.py"
+)
+# 它前面那个迁移：建 5 张零售表
+RETAIL_SCHEMA_REVISION = "e205344666e8"
+
+# 检索元数据列。本阶段只建字段，没有代码往里写。
+RETRIEVAL_METADATA_COLUMNS = {"keywords", "aliases", "search_text"}
 
 # 迁移之前的 5 张零售表 + alembic 自己的版本表，字段一个都不该变
 RETAIL_TABLE_COLUMNS = {
@@ -92,11 +101,11 @@ def function_calls(path: pathlib.Path, function_name: str) -> list[str]:
 
 
 def upgrade_calls() -> list[str]:
-    return function_calls(NEW_MIGRATION_FILE, "upgrade")
+    return function_calls(KNOWLEDGE_SCHEMA_MIGRATION_FILE, "upgrade")
 
 
 def downgrade_calls() -> list[str]:
-    return function_calls(NEW_MIGRATION_FILE, "downgrade")
+    return function_calls(KNOWLEDGE_SCHEMA_MIGRATION_FILE, "downgrade")
 
 
 # --------------------------------------------------------------------------
@@ -177,8 +186,9 @@ def test_chunks_table_columns():
         "id", "document_id", "section_title", "chunk_index",
         "content", "content_for_embedding", "content_hash",
         "estimated_token_count", "char_count",
-        "embedding", "embedding_model", "created_at", "updated_at",
-    }
+        "embedding", "embedding_model",
+        "created_at", "updated_at",
+    } | RETRIEVAL_METADATA_COLUMNS
 
 
 def test_embedding_column_renders_as_vector_with_the_configured_dimension():
@@ -240,6 +250,96 @@ def test_no_vector_index_is_created():
 
     assert "hnsw" not in index_names
     assert "ivfflat" not in index_names
+
+
+# --------------------------------------------------------------------------
+# 检索元数据列：keywords / aliases / search_text
+#
+# 这三列本阶段只建结构，没有代码写入，所以测试全部是「定义是否正确」，
+# 不涉及任何行为。真正往它们写数据是下一阶段的事。
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("column_name", sorted({"keywords", "aliases"}))
+def test_jsonb_metadata_columns_are_jsonb(column_name):
+    """用 JSONB 而不是 JSON：JSONB 支持 GIN 索引和包含查询，JSON 两样都不行。"""
+    column = Base.metadata.tables["knowledge_chunks"].c[column_name]
+
+    assert isinstance(column.type, JSONB)
+
+
+@pytest.mark.parametrize("column_name", sorted({"keywords", "aliases"}))
+def test_jsonb_metadata_columns_are_not_nullable(column_name):
+    """非空：后续召回会直接对这些列做包含查询，NULL 会让这些行静默漏掉。"""
+    assert Base.metadata.tables["knowledge_chunks"].c[column_name].nullable is False
+
+
+@pytest.mark.parametrize("column_name", sorted({"keywords", "aliases"}))
+def test_jsonb_metadata_python_default_is_a_factory_not_a_shared_list(column_name):
+    """必须是 default=list，不能是 default=[]。
+
+    后者是**一个**列表对象，被所有实例共享：往一条切片上 append，
+    另一条也跟着变。这种串味只在多实例共存时才暴露，最难排查。
+
+    所以这里不只断言「是个可调用对象」，还真的调两次看返回的是不是同一个列表
+    （SQLAlchemy 会把工厂包一层、多接一个上下文参数，所以用 None 当上下文）。
+    """
+    default = Base.metadata.tables["knowledge_chunks"].c[column_name].default
+
+    assert default is not None
+    assert default.is_callable is True
+    assert default.is_scalar is False
+    assert default.arg(None) == []
+    assert default.arg(None) is not default.arg(None)
+
+
+@pytest.mark.parametrize("column_name", sorted({"keywords", "aliases"}))
+def test_jsonb_metadata_server_default_is_an_array_not_a_string(column_name):
+    """数据库默认值要解析成 JSON 数组，不是字符串 "[]"。
+
+    写漏 ::jsonb 转换、或者手滑写成 '"[]"'，库里存的就是 JSON 字符串；
+    后续 jsonb_typeof(...) = 'array' 的检查会静默漏掉这些行。
+    """
+    arg = str(Base.metadata.tables["knowledge_chunks"].c[column_name].server_default.arg)
+
+    assert arg == "'[]'::jsonb"
+
+
+def test_search_text_is_text_and_not_nullable():
+    column = Base.metadata.tables["knowledge_chunks"].c.search_text
+
+    assert isinstance(column.type, Text)
+    assert column.nullable is False
+
+
+def test_search_text_has_an_empty_string_default():
+    """Python 与数据库两侧的默认值都是空串，不是 NULL。
+
+    在元数据提取接入之前，新切片只能靠这个默认值落库；
+    给 NULL 的话要么插不进去，要么让后续「search_text = ''」的判断失灵。
+    """
+    column = Base.metadata.tables["knowledge_chunks"].c.search_text
+
+    assert column.default.arg == ""
+    assert str(column.server_default.arg) == "''"
+
+
+def test_search_text_trigram_index_is_declared_on_the_model():
+    """索引必须同时写在模型里，不能只写在迁移里。
+
+    只写在迁移里的话，Base.metadata 与真实库不一致——以后 autogenerate
+    会发现「库里有这个索引、模型里没有」，再生成一条删它的迁移。
+    """
+    table = Base.metadata.tables["knowledge_chunks"]
+    indexes = {index.name: index for index in table.indexes}
+
+    assert SEARCH_TEXT_TRGM_INDEX in indexes
+    index = indexes[SEARCH_TEXT_TRGM_INDEX]
+    assert [column.name for column in index.columns] == ["search_text"]
+
+    options = index.dialect_options["postgresql"]
+    assert options["using"] == "gin"
+    assert options["ops"] == {"search_text": "gin_trgm_ops"}
 
 
 @pytest.mark.parametrize(
@@ -334,31 +434,36 @@ def test_model_dimension_matches_configured_embedding_dimension():
 # --------------------------------------------------------------------------
 
 
-def test_new_migration_file_exists_and_chains_onto_the_previous_revision():
-    assignments = migration_module_assignments(NEW_MIGRATION_FILE)
+def test_knowledge_schema_migration_chains_onto_the_retail_schema():
+    assignments = migration_module_assignments(KNOWLEDGE_SCHEMA_MIGRATION_FILE)
 
-    assert assignments["revision"] == f"'{NEW_REVISION}'"
-    assert assignments["down_revision"] == f"'{PREVIOUS_REVISION}'"
+    assert assignments["revision"] == f"'{KNOWLEDGE_SCHEMA_REVISION}'"
+    assert assignments["down_revision"] == f"'{RETAIL_SCHEMA_REVISION}'"
 
 
 def test_existing_migration_is_untouched():
     """已有迁移必须保持冻结——它记录的是当时发生了什么，改了就无法重放。"""
-    path = VERSIONS_DIR / f"{PREVIOUS_REVISION}_create_retail_analytics_schema.py"
+    path = VERSIONS_DIR / f"{RETAIL_SCHEMA_REVISION}_create_retail_analytics_schema.py"
     assignments = migration_module_assignments(path)
 
-    assert assignments["revision"] == f"'{PREVIOUS_REVISION}'"
+    assert assignments["revision"] == f"'{RETAIL_SCHEMA_REVISION}'"
     assert assignments["down_revision"] == "None"
 
 
-def test_migration_is_the_single_alembic_head():
-    """迁移链只能有一个头；出现分叉时 upgrade head 会报错，谁也不知道该走哪条。"""
+def test_migration_chain_has_exactly_one_head():
+    """迁移链只能有一个头；出现分叉时 upgrade head 会报错，谁也不知道该走哪条。
+
+    这里断言的是「只有一个」，不是「一定是哪一条」——具体是哪条
+    由每条迁移自己的测试负责（见 test_rag_search_metadata_migration.py）。
+    每加一条迁移，head 就会前移一次，把具体 revision 写死在这里会变成无谓的维护。
+    """
     from alembic.config import Config
     from alembic.script import ScriptDirectory
 
     config = Config(str(ALEMBIC_INI))
     heads = ScriptDirectory.from_config(config).get_heads()
 
-    assert list(heads) == [NEW_REVISION]
+    assert len(heads) == 1
 
 
 def test_migration_creates_the_vector_extension_idempotently():
@@ -380,7 +485,10 @@ def test_migration_creates_both_tables_and_an_embedding_column():
     assert any("'knowledge_chunks'" in call for call in calls)
     # 列类型由 VectorType 渲染，维度取自模块常量
     assert any("VectorType(EMBEDDING_DIMENSIONS)" in call for call in calls)
-    assert migration_module_assignments(NEW_MIGRATION_FILE)["EMBEDDING_DIMENSIONS"] == "1024"
+    assert (
+        migration_module_assignments(KNOWLEDGE_SCHEMA_MIGRATION_FILE)["EMBEDDING_DIMENSIONS"]
+        == "1024"
+    )
 
 
 def test_migration_does_not_create_a_vector_index():
@@ -392,20 +500,19 @@ def test_migration_does_not_create_a_vector_index():
 
 
 def test_migration_does_not_touch_the_retail_tables():
-    """本迁移只新增两张表，不得出现删除或修改零售表的语句。"""
-    joined = " ".join(upgrade_calls())
+    """本迁移只新增两张知识库表，不得出现删除或修改零售表的语句。
 
-    for table in RETAIL_TABLE_COLUMNS:
-        assert f"drop_table('{table}')" not in joined
-        assert f"'{table}'" not in joined, f"upgrade 里提到了零售表 {table}"
-
-
-def test_migration_does_not_touch_the_retail_tables():
-    """本迁移只新增两张表，不得出现删除或修改零售表的语句。"""
-    source = migration_source(NEW_MIGRATION_FILE)
+    两种查法都保留：AST 调用列表查的是「执行的语句」，
+    源码文本查的是「整段 upgrade 提到过什么」——后者更严，
+    连注释和字符串里的表名都拦得住。
+    """
+    calls = " ".join(upgrade_calls())
+    source = migration_source(KNOWLEDGE_SCHEMA_MIGRATION_FILE)
     upgrade_body = source.split("def downgrade()")[0]
 
     for table in RETAIL_TABLE_COLUMNS:
+        assert f"drop_table('{table}')" not in calls
+        assert f"'{table}'" not in calls, f"upgrade 里提到了零售表 {table}"
         assert f"drop_table('{table}')" not in upgrade_body
         assert f'"{table}"' not in upgrade_body, f"upgrade 里提到了零售表 {table}"
 
