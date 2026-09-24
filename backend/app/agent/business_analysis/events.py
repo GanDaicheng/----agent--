@@ -52,5 +52,8 @@ def to_public_event(raw_event: Any) -> AnalysisEvent | None:
         report_id = raw_event.get("report_id")
         return AnalysisEvent.run_completed(raw_event["run_id"], report_id if isinstance(report_id, str) else None)
     if event_type == "error":
+        error_code = raw_event.get("error_code")
+        if error_code in {"AGENT_RUN_FAILED", "AGENT_RUN_LIMIT_REACHED", "AGENT_RUN_TIMEOUT"}:
+            return AnalysisEvent.error(error_code)
         return AnalysisEvent.error("AGENT_RUN_FAILED")
     return None
