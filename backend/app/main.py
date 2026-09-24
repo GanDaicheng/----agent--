@@ -53,7 +53,7 @@ app.add_middleware(
     allow_origins=DEVELOPMENT_ALLOWED_ORIGINS,
     # 本服务不使用 Cookie / Authorization 凭据，保持 False 最小化暴露面
     allow_credentials=False,
-    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_methods=["GET", "POST", "PUT", "OPTIONS"],
     allow_headers=["Content-Type"],
 )
 

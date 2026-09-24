@@ -16,7 +16,7 @@ from app.agent.business_analysis.schemas import AnalysisEvent, BusinessAnalysisR
 from app.agent.business_analysis.tools import bind_report_saver
 from app.core.config import get_settings
 from app.repositories.database import get_engine
-from app.services.analysis_report import create_run, save_report
+from app.services.analysis_report import create_run, save_report, update_run_status
 
 
 class BusinessAnalysisBusyError(RuntimeError):
@@ -134,10 +134,13 @@ async def run_business_analysis(
     _active_threads.add(request.thread_id)
     settings = get_settings()
     report_chunks: list[str] = []
+    run_id: str | None = None
+    active_connection_ref: Any | None = None
 
     try:
         async with _agent_scope(agent) as active_agent:
             async with _connection_scope(connection) as active_connection:
+                active_connection_ref = active_connection
                 run_id = await create_run(
                     active_connection,
                     thread_id=request.thread_id,
@@ -161,21 +164,29 @@ async def run_business_analysis(
                                     report_chunks.append(event.content)
                                 yield event
                     except _RunLimitReached:
+                        await update_run_status(active_connection, run_id=run_id, status="failed")
                         yield AnalysisEvent.error("AGENT_RUN_LIMIT_REACHED")
                         return
                     except TimeoutError:
+                        await update_run_status(active_connection, run_id=run_id, status="timeout")
                         yield AnalysisEvent.error("AGENT_RUN_TIMEOUT")
                         return
+                    except asyncio.CancelledError:
+                        await update_run_status(active_connection, run_id=run_id, status="cancelled")
+                        raise
 
                 report_id = await save_report(
                     active_connection,
                     run_id=run_id,
                     report={"summary": "".join(report_chunks)[: settings.business_analysis_context_char_limit]},
                 )
+                await update_run_status(active_connection, run_id=run_id, status="completed")
                 yield AnalysisEvent.run_completed(run_id, report_id)
     except BusinessAnalysisBusyError:
         raise
     except Exception:
+        if run_id is not None and active_connection_ref is not None:
+            await update_run_status(active_connection_ref, run_id=run_id, status="failed")
         yield AnalysisEvent.error("AGENT_RUN_FAILED")
     finally:
         _active_threads.discard(request.thread_id)

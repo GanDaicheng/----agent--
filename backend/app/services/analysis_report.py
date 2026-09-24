@@ -46,6 +46,26 @@ async def create_run(
     return run_id
 
 
+async def update_run_status(
+    connection: AsyncConnection,
+    *,
+    run_id: str,
+    status: str,
+) -> None:
+    if status not in {"running", "completed", "failed", "timeout", "cancelled"}:
+        raise ValueError(f"不支持的运行状态：{status}")
+    await connection.execute(
+        text(
+            """
+            UPDATE business_analysis_runs
+            SET status = :status, updated_at = now()
+            WHERE id = :run_id
+            """
+        ),
+        {"run_id": run_id, "status": status},
+    )
+
+
 async def append_artifact(
     connection: AsyncConnection,
     *,

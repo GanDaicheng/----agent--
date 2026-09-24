@@ -40,12 +40,13 @@ class FakeAgent:
 @pytest.mark.anyio
 async def test_runner_emits_start_tool_report_and_complete_events():
     request = BusinessAnalysisRequest(thread_id="thread-1", message="分析销售额")
+    connection = FakeConnection()
     events = [
         event
         async for event in run_business_analysis(
             request,
             agent=FakeAgent(),
-            connection=FakeConnection(),
+            connection=connection,
         )
     ]
 
@@ -56,6 +57,7 @@ async def test_runner_emits_start_tool_report_and_complete_events():
         "report_delta",
         "run_completed",
     ]
+    assert any("UPDATE business_analysis_runs" in str(statement) for statement, _ in connection.statements)
 
 
 @pytest.mark.anyio
