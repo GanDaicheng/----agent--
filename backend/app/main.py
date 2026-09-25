@@ -40,8 +40,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 
 app = FastAPI(
-    title="数据中台 Agent",
-    description="零售数据中台智能问数工作台后端服务",
+    title="InsightFlow 数据智能平台",
+    description="面向零售与天猫数据的智能问数、知识检索和经营分析服务",
     version="0.1.0",
     lifespan=lifespan,
 )

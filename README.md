@@ -1,1195 +1,212 @@
-# AI 数据智能平台
+# InsightFlow 数据智能平台
 
-一个作品集级的平台项目：用自然语言提问（例如“2025 年各月销售额趋势如何”），
-系统检索指标口径与数据目录、生成安全 SQL、查询数据仓库，最后返回结论与图表；
-另一条链路把业务文档切片向量化入库，回答口径与规则类问题。
+一个可演示的数据分析项目：接入结构化业务数据与业务文档，使用自然语言完成安全问数、知识检索和经营分析，并展示从数据入库到结论生成的完整链路。
 
-当前同时接入两类业务数据：可复现的零售样例数仓，以及经过用户级稳定抽样的
-天猫 IJCAI 2015 真实公开数据。两套数据共用同一套领域路由、指标目录、安全 SQL、
-PostgreSQL 查询和 RAG 知识检索链路，并禁止跨领域 JOIN。
+## 项目亮点
 
-## 项目目标
+- 接入天猫 IJCAI 2015 真实公开数据，流式处理 5,587 万条原始记录。
+- PostgreSQL 采用 Silver 明细层和 Gold 汇总层，智能问数只开放 Gold 表。
+- 自然语言问题经过领域路由、资产检索、SQL 生成、双层安全校验和只读事务后查询数据库。
+- 业务文档经过切片、Embedding、向量与关键词混合召回、RRF 融合和 Reranker 精排。
+- 前端可展示问数结果、检索来源、执行过程和多步骤经营分析报告。
+- Docker Compose 一键启动 PostgreSQL、FastAPI 和 Next.js。
 
-把「问数」这件事做成一条可观测、可追溯的链路：
-
-1. 理解用户问题，识别涉及的指标与维度
-2. 检索指标语义层和数据目录，确定口径与可用表
-3. 生成受约束的安全 SQL（只读、限定表、限定行数）
-4. 执行查询，取回数据
-5. 输出结论文本和图表，并记录本次运行过程
-
-## 已接入的数据与能力
-
-| 数据域 | 数据性质 | 数据规模 | 主要用途 |
-| --- | --- | --- | --- |
-| 零售样例 | 固定随机种子生成，可重复构建 | 240 位客户、24 个商品、3,404 条订单明细 | 销售额、客单价、区域、商品和会员复购分析 |
-| 天猫 IJCAI 2015 | 真实公开数据，按 `user_id % 55 = 0` 稳定抽样 | 7,712 位用户、998,542 条行为、9,558 个复购样本 | 行为趋势、商家/类目排行、用户购买广度、历史复购和复购样本分析 |
-
-结构化数据进入 PostgreSQL：Silver 层保留明细，Gold 层提供可安全查询的汇总表；
-指标口径、字段解释、抽样规则和数据限制写成 Markdown，切片并向量化进入 pgvector。
-数字只由 SQL 精确计算，知识库只负责解释口径与限制。
-
-## 当前技术栈
-
-| 层次 | 技术 | 状态 |
-| --- | --- | --- |
-| 后端服务 | FastAPI + Uvicorn | 已接入 |
-| Agent 编排 | LangChain / LangGraph | 已接入 |
-| 模型接入 | OpenAI 兼容接口（DeepSeek / Qwen / OpenAI） | 已接入 |
-| 数据存储 | PostgreSQL 16 + pgvector | 已接入：零售数仓、天猫 Silver/Gold 表与知识库向量表均已建出 |
-| 数据访问 | SQLAlchemy 2.x（异步）+ asyncpg | 已接入：受控只读查询与知识库读写都在用 |
-| 数据库迁移 | Alembic | 已接入：零售、知识库与天猫数据域均由迁移建表，当前 head 为 `bea2b5793f31` |
-| 向量化 / 精排模型 | 阿里云百炼：`text-embedding-v4`（1024 维）、`qwen3-rerank` | 已接入：前者走 OpenAI 兼容接口，后者走独立的 `/reranks` 接口 |
-| 检索增强 | 查询改写 + 向量/关键词混合召回 + RRF 融合 + 精排 | 已接入：知识问答走这条链路，每一步失败都能降级 |
-| 前端工作台 | Next.js 16 + React 19 + TypeScript（App Router） | 已接入：四个功能页，均按用户操作调用后端接口 |
-| 本地环境 | Docker Compose | 已接入：PostgreSQL + FastAPI + Next.js 三服务一键启动 |
-
-## 目录结构
-
-```
-backend/
-  app/
-    main.py           # FastAPI 应用入口，负责组装和挂载路由
-    api/              # HTTP 路由层，协议定义与请求校验
-    agent/            # LangGraph 编排、工具注册、提示词
-    core/             # 配置、日志、异常、路径等基础设施
-    models/           # 数据库 ORM 模型（零售数仓 + 天猫 Silver/Gold + 知识库）
-    services/         # 业务服务层：检索（改写/向量/关键词/RRF/精排）、入库、回答
-    repositories/     # 数据访问层：database.py 管理异步引擎与连接，不含表结构
-  alembic/            # 数据库迁移（零售数仓 → 知识库 → 检索元数据 → 天猫数据域）
-  knowledge_seed/     # 零售与天猫的指标口径、数据字典和业务规则
-  scripts/            # 数据导入、验证、知识入库、embedding、检索与精排脚本
-  Dockerfile          # 后端生产镜像：python:3.14-slim + requirements.txt + app/
-  tests/              # 后端自动化测试（不需数据库、不调真实模型）
-  requirements-dev.txt# 仅开发/测试依赖，不进生产镜像
-frontend/
-  src/app/            # Next.js App Router：layout.tsx、page.tsx 与样式
-  public/             # 静态资源目录（当前为空，占位保留）
-  legacy-static/      # 初始化 Next.js 之前的静态聊天页，保留备查
-  Dockerfile          # 前端生产镜像：多阶段构建 + standalone 产物
-  package.json
-docker-compose.yml    # 三服务编排：postgres + backend + frontend
-.dockerignore         # 构建上下文排除清单，确保 .env 不进镜像
-requirements.txt
-.env.example
-```
-
-分层约定：`api` 只处理 HTTP，`services` 承担业务逻辑，`repositories` 只碰数据库，
-`agent` 负责编排模型与工具。跨层调用方向为 `api → services → repositories`。
-
-## 一键启动全部服务（Docker）
-
-三个服务——PostgreSQL、FastAPI 后端、Next.js 前端——都由 Docker Compose 编排，
-一条命令即可全部启动。**所有命令都要在项目根目录执行。**
-
-启动顺序不是「一起启动」，而是由健康检查串成一条链，每一环都等前一环真的可用：
-
-```
-postgres healthy  →  backend healthy  →  frontend healthy
-```
-
-所以后端不会比数据库先起来，前端也不会在后端就绪前启动。
-
-### 首次启动，或依赖有变化时
-
-```powershell
-docker compose up --build
-```
-
-`--build` 表示先重新构建镜像。**凡是改了 `requirements.txt`、`frontend/package.json`
-或任何 Dockerfile，都必须带上它**，否则容器里跑的还是旧镜像。
-
-这条命令会把三个服务的日志持续输出到当前终端。按 `Ctrl+C` 停止服务，
-**数据 volume 会保留**，下次启动数据还在。
-
-### 后台启动
-
-```powershell
-docker compose up --build -d
-```
-
-`-d` 是 detached，服务在后台运行，终端立刻可以继续用。
-
-### 查看服务与健康状态
-
-```powershell
-docker compose ps
-```
-
-正常情况下 `postgres`、`backend`、`frontend` 的 `STATUS` 列都应该显示 `healthy`。
-刚启动时可能显示 `starting`，等十几秒再看。
-
-### 查看日志
-
-```powershell
-docker compose logs -f backend
-docker compose logs -f frontend
-docker compose logs -f postgres
-```
-
-`-f` 持续跟踪输出；按 `Ctrl+C` 只退出日志查看，**不会停掉服务**。
-
-### 停止服务但保留数据
-
-```powershell
-docker compose down
-```
-
-`down` 会**删除容器和网络，但不会删除 PostgreSQL 数据卷** `postgres_data`。
-下次 `docker compose up` 时数据仍然在。平时收工用这条就够了。
-
-### 清空本地数据库（危险命令）
-
-```powershell
-docker compose down -v
-```
-
-> **警告**：`-v` 会连同具名 volume `postgres_data` 一起删除，
-> **本地数据库的所有数据都会丢失**，下次启动是一个全新的空库。
-
-只有在明确需要从头初始化时才使用——例如改了 `POSTGRES_USER` 或 `POSTGRES_PASSWORD`，
-因为这两个变量只在 volume 首次创建时生效。
-
-### 访问地址
+## 系统架构
 
 ```text
-前端：        http://localhost:3000
-后端文档：    http://localhost:8000/docs
-后端健康检查：http://localhost:8000/api/v1/health
+结构化数据
+  → 数据校验与稳定抽样
+  → PostgreSQL Silver 明细层
+  → PostgreSQL Gold 汇总层
+  → 安全 SQL 查询
+  → 数据结论与图表
+
+业务文档
+  → 标题与语义边界切片
+  → Embedding
+  → PostgreSQL + pgvector
+  → 向量/关键词混合召回
+  → RRF 融合与 Reranker 精排
+  → 带来源的知识回答
 ```
 
-两个健康接口的分工：
+数字只由 SQL 精确计算，向量知识库只负责解释指标口径、字段含义和数据限制。
 
-- `/api/v1/health` 是 **Docker Compose 的后端就绪检查**。Compose 用它判断 backend
-  容器能否对外服务，前端容器也要等它通过才会启动。
-- `/health/db` 是**保留的数据库连接自检接口**，适合后端跑在 Windows 宿主机时排查数据库连接。
+## 已接入的数据
 
-两者在数据库可用时返回 `200`，代表后端与 PostgreSQL 都能正常通信；
-数据库不可用时返回 `503`。
+| 数据域 | 规模 | 可以分析什么 |
+| --- | --- | --- |
+| 零售样例 | 240 位客户、24 个商品、3,404 条订单明细 | 销售额、客单价、区域、商品和会员复购 |
+| 天猫 IJCAI 2015 | 7,712 位用户、998,542 条行为、9,558 个复购样本 | 行为趋势、商家/类目排行、购买广度和历史复购 |
+| 业务知识库 | 26 份文档、462 个切片 | 指标口径、数据字典、抽样规则和业务限制 |
 
-### 容器里的数据库连接串
+天猫数据按 `user_id % 55 = 0` 做用户级稳定抽样。四个 CSV 使用同一规则，保证用户画像、行为日志和复购样本仍能正确关联。
 
-backend 容器用的连接串是 `DATABASE_URL_DOCKER`，它的主机名是 Compose 服务名 `postgres`。
-**不能用 `DATABASE_URL`**——那是给宿主机上的后端用的，主机名是 `localhost`，
-而容器里的 `localhost` 只代表容器自己。
+### 天猫行为分布
 
-这两个变量都从项目根目录的 `.env` 读取。`.env.example` 只提供**不含真实密钥的安全示例**，
-复制成 `.env` 后再填自己的值。**`.env` 已被 `.gitignore` 忽略，不要提交到 Git。**
+| 行为 | 记录数 |
+| --- | ---: |
+| 点击 `click` | 881,857 |
+| 加购 `cart` | 1,343 |
+| 收藏 `favorite` | 55,306 |
+| 购买 `buy` | 60,036 |
 
-## 本地启动后端
+`buy` 表示购买行为记录，不等于一笔订单。数据没有金额、订单号和件数，因此不会回答 GMV、客单价或真实订单量。
 
-> **启动顺序：先启动 PostgreSQL，再启动 FastAPI。**
-> 数据库没起来后端一样能启动（连接是懒加载的），但 `/health/db` 会返回 503。
-> 完整的启动顺序是：
->
-> ```powershell
-> docker compose up -d postgres    # 1. 先在项目根目录起数据库
-> docker compose ps                # 2. 等到 STATUS 显示 healthy
-> cd backend                       # 3. 再起后端
-> uvicorn app.main:app --reload --loop app.core.event_loop:selector_loop_factory
-> ```
+## 数据库设计
 
-### 1. 准备虚拟环境
+### Silver 明细层
 
-```powershell
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
-```
+| 表 | 内容 |
+| --- | --- |
+| `tmall_users` | 用户画像 |
+| `tmall_user_events` | 用户行为明细 |
+| `tmall_repurchase_samples` | train/test 复购样本 |
 
-### 2. 配置模型
+### Gold 查询层
+
+| 表 | 分析用途 |
+| --- | --- |
+| `tmall_daily_metrics` | 每日行为趋势 |
+| `tmall_merchant_metrics` | 商家行为、购买用户和历史复购 |
+| `tmall_category_metrics` | 类目行为与购买用户 |
+| `tmall_user_metrics` | 用户活跃、购买广度和历史复购 |
+| `tmall_funnel_metrics` | 四类行为的事件数与用户数 |
+| `tmall_repurchase_metrics` | train/test 样本与标签分布 |
+
+用户行为明细不进入问数白名单，避免模型查询单个用户的完整行为轨迹。零售表和天猫表也禁止跨领域 JOIN，防止产生可以执行但没有业务意义的结果。
+
+## 已实现功能
+
+| 功能 | 实现方式 |
+| --- | --- |
+| 真实数据导入 | ZIP 流式读取、逐行校验、用户级稳定抽样、asyncpg COPY |
+| 导入可靠性 | 文件哈希幂等、运行台账、原子 `--replace`、失败回滚 |
+| 数据汇总 | Silver 明细整表重算六张 Gold 表，并校验 Gold/Silver 一致性 |
+| 智能问数 | LangGraph 编排领域识别、资产发现、SQL 生成、执行与解释 |
+| SQL 安全 | sqlglot AST 校验、表字段白名单、行数限制、PostgreSQL 只读事务 |
+| 知识问答 | 查询改写、向量与关键词混合召回、RRF、Reranker、来源引用 |
+| 经营分析 | 多步骤工具调用、SSE 进度、Checkpoint 恢复和结构化报告 |
+| Web 工作台 | Next.js 页面展示数据采集、知识问答、智能问数和经营分析 |
+
+## 可以演示的问题
+
+### 数据分析
+
+- 天猫每天的点击、收藏、加购和购买趋势如何？
+- 哪一天购买行为最多？双十一前后有什么变化？
+- 购买用户数最多的前 10 个商家有哪些？
+- 哪些商家的历史复购率最高？
+- 购买用户数最多的类目有哪些？
+- train 中正样本有多少，正样本率是多少？
+
+### 口径与规则
+
+- 哪些数据进入普通数据库，哪些进入向量数据库？
+- 为什么按 `user_id` 取模抽样？
+- `buy` 为什么不能直接叫订单？
+- 历史复购、购买广度和 train 标签有什么区别？
+- 为什么 test 的 `probability` 是空值？
+- 为什么天猫数据和零售数据不能跨领域 JOIN？
+
+## 技术栈
+
+| 层次 | 技术 |
+| --- | --- |
+| 前端 | Next.js 16、React 19、TypeScript |
+| 后端 | FastAPI、SQLAlchemy 2、asyncpg |
+| 流程编排 | LangChain、LangGraph、Deep Agents |
+| 数据库 | PostgreSQL 16、pgvector、Alembic |
+| SQL 安全 | sqlglot、只读事务、白名单与超时控制 |
+| RAG | text-embedding-v4、混合检索、RRF、qwen3-rerank |
+| 部署 | Docker Compose |
+
+## 快速启动
+
+### 1. 配置环境变量
 
 ```powershell
 Copy-Item .env.example .env
 ```
 
-编辑 `.env`，把 `OPENAI_API_KEY` 换成真实密钥。默认指向 DeepSeek，
-换成通义千问或 OpenAI 只需改 `OPENAI_BASE_URL` 和 `MODEL_NAME`，代码不用动。
+在 `.env` 中填写对话模型、Embedding 和 Reranker 的 API Key。
 
-### 3. 启动服务
-
-必须在 `backend/` 目录下启动，保证 `app` 是根级包：
+### 2. 启动全部服务
 
 ```powershell
-cd backend
-uvicorn app.main:app --reload --loop app.core.event_loop:selector_loop_factory
-```
-
-接口地址：
-
-- 服务说明：http://127.0.0.1:8000/ （返回 JSON，**不再提供 HTML 页面**）
-- 接口文档：http://127.0.0.1:8000/docs
-- 健康检查：http://127.0.0.1:8000/api/v1/health
-- 数据库自检：http://127.0.0.1:8000/health/db
-
-### 4. 数据库连接自检
-
-`GET /health/db` 只执行一条 `SELECT 1`，用来确认「Python 驱动 → 连接串 → 账号密码 →
-宿主机端口映射 → PostgreSQL 容器」这条链路是通的。它不读任何业务表。
-
-连接正常时返回 `200`：
-
-```json
-{
-  "status": "ok",
-  "database": "connected"
-}
-```
-
-数据库连不上时返回 `503`，并给出结构化的错误，不会带上连接串或密码：
-
-```json
-{
-  "status": "error",
-  "database": "unavailable",
-  "error_type": "ConnectionRefusedError",
-  "message": "无法连接数据库，请确认 PostgreSQL 容器已启动且 DATABASE_URL 配置正确。"
-}
-```
-
-如果是 `DATABASE_URL` 本身没配或格式不对，会返回 `500` 并在 `detail` 里说明该怎么改。
-响应中的 `error_type` 是异常类名（如 `ConnectionRefusedError`、`InvalidPasswordError`），
-足够定位问题，同时避免把凭据信息带出去。
-
-## 本地 PostgreSQL（只用 Docker 跑数据库）
-
-> 这一节是**宿主机开发**用的：只把数据库放进容器，后端仍跑在 Windows 宿主机上，
-> 两者通过 `localhost:5432` 通信。想三个服务全在容器里跑，用上面的
-> 「一键启动全部服务（Docker）」。
->
-> 之所以保留这条路：改后端代码时 `uvicorn --reload` 的热重载比重建镜像快得多。
-
-所有命令都要在**项目根目录**执行。
-
-### 启动
-
-```powershell
-docker compose up -d postgres
-```
-
-首次启动会初始化数据库，大约十秒后进入健康状态。
-
-### 检查状态
-
-```powershell
+docker compose up --build -d
 docker compose ps
 ```
 
-`STATUS` 列显示 `Up ... (healthy)` 即表示已能接受连接。
-如果显示 `starting`，等几秒再看；显示 `unhealthy` 则用下面的日志命令排查。
+访问地址：
 
-```powershell
-docker compose logs postgres        # 查看日志
-docker compose exec postgres pg_isready -U data_platform -d data_platform
-```
+- 前端：http://localhost:3000
+- 后端 API 文档：http://localhost:8000/docs
+- 健康检查：http://localhost:8000/api/v1/health
 
-想直接连进数据库执行 SQL：
-
-```powershell
-docker compose exec postgres psql -U data_platform -d data_platform
-```
-
-### 停止
-
-```powershell
-docker compose stop postgres    # 只停容器，数据完整保留
-docker compose down             # 删除容器和网络，数据仍然保留
-```
-
-日常开发用 `stop` 就够，下次 `docker compose up -d postgres` 会接着用原来的数据。
-
-### 清空本地数据
-
-```powershell
-docker compose down -v
-```
-
-`-v` 会连同具名 volume 一起删除，**数据库里的所有数据都会丢失**，下次启动是全新的空库。
-只有在想从头重来（比如改了初始化配置、想重跑建表脚本）时才用它。
-
-### 数据库连接信息
-
-| 项 | 值 |
-| --- | --- |
-| 主机 | `localhost` |
-| 端口 | `5432` |
-| 数据库 | `POSTGRES_DB`，默认 `data_platform` |
-| 用户名 | `POSTGRES_USER`，默认 `data_platform` |
-| 密码 | `POSTGRES_PASSWORD`，默认 `data_platform_dev` |
-
-这三个变量在 `.env` 中配置，会被 `docker-compose.yml` 读取。
-**注意它们只在 volume 首次创建时生效**：想改用户名或密码，必须先 `docker compose down -v`
-清空数据再启动，否则改不动。
-
-## 零售样例数据底座
-
-数据中台阶段的第 1 小步：把空的 PostgreSQL 容器变成**可真实执行零售分析 SQL 的样例数据底座**。
-
-### 五张表
-
-四张维度表 + 一张订单事实表：
-
-| 表 | 类型 | 主键 | 说明 |
-| --- | --- | --- | --- |
-| `customers` | 维度 | `customer_id` | 客户与会员等级（普通/银卡/金卡/黑金） |
-| `products` | 维度 | `product_id` | 商品、品类、单价（`Numeric(12,2)`，不用浮点） |
-| `regions` | 维度 | `region_id` | 区域，`region_name` 唯一 |
-| `date_dim` | 维度 | `date_id`（YYYYMMDD） | 覆盖 2025 全年 365 天，`full_date` 唯一 |
-| `orders` | 事实 | `order_id` | 订单明细，外键关联上面四张表 |
-
-`orders` 只存订单明细这一层的原始粒度，**不存任何聚合结果**——月度、区域、商品、会员的汇总
-全部由 SQL 现场算出来，这样数据中台才是「可真实分析」的。
-
-金额口径（数据库层用 CHECK 约束钉死）：
-
-```text
-gross_amount    = quantity × unit_price
-net_amount      = gross_amount - discount_amount
-discount_amount ≤ gross_amount
-```
-
-### 初始化与验证
-
-三个命令都在 `backend/` 目录下执行，且都会读取项目根 `.env` 里的 `DATABASE_URL`：
+### 3. 初始化数据库
 
 ```powershell
 cd backend
-
-# 1. 建表（迁移）
 python -m alembic upgrade head
-python -m alembic current
-
-# 2. 写入样例数据（幂等，可重复执行）
 python scripts/seed_retail_data.py
-
-# 3. 只读验证五类业务规律（不通过则退出码为 1）
-python scripts/verify_retail_data.py
-```
-
-### 样例数据规模
-
-| 表 | 行数 |
-| --- | --- |
-| `regions` | 4 |
-| `customers` | 240 |
-| `products` | 24（6 个品类） |
-| `date_dim` | 365（2025-01-01 ~ 2025-12-31） |
-| `orders` | 3404 |
-
-### 业务规律由生成规则产生
-
-样例数据不是随机数，也不是「生成后再手工改统计结果」：所有规律都来自
-`app/services/retail_seed.py` 里的权重参数，固定随机种子，两次执行结果完全一致。
-
-| 规律 | 产生方式 |
-| --- | --- |
-| 区域差异 | 区域权重 华东 0.38 > 华南 0.26 > 华北 0.20 > 华中 0.16 |
-| 季节性 | 月份权重 11 月 2.10、12 月 2.50，普通月份约 1.0 |
-| 热销商品 | `PRD005` / `PRD009` / `PRD013` 的抽样权重是普通商品的 8 倍 |
-| 会员复购 | 分层抽样：黑金 0.95 > 金卡 0.84 > 银卡 0.62 > 普通 0.40 |
-
-### 分析口径
-
-```text
-复购率 = 在统计周期内订单数 ≥ 2 的客户数 / 有订单的客户数
-客单价 = 总净销售额 / 去重订单数
-```
-
-### 幂等性
-
-`seed_retail_data.py` 写入时统一使用 `ON CONFLICT DO NOTHING`，且生成过程确定，
-因此**重复执行不会产生重复数据**，第二次执行的「本次新增」应全部为 0。
-
-### Alembic 与连接串
-
-`backend/alembic.ini` 里**不含任何连接串**（`sqlalchemy.url` 一项被注释掉），
-真实连接串只存在于项目根 `.env`，由 `backend/alembic/env.py` 在运行时通过
-`app.core.config.get_settings()` 读取。
-
-注意 `alembic.ini` 必须保持纯 ASCII：Alembic 会按操作系统区域编码读取该文件，
-在中文 Windows 上按 GBK 解析，写入中文注释会直接抛 `UnicodeDecodeError`。
-
-## 天猫 IJCAI 2015 真实数据接入
-
-这条流水线直接从官方 `data_format1.zip` 流式读取 CSV，不需要先解压约 1.9 GB 的行为日志。
-四个文件使用同一条用户级规则 `user_id % sample_modulus == sample_residue` 抽样，保证用户画像、
-行为日志和复购样本之间仍能关联。默认参数为 `55 / 0`。
-
-### 原始文件与已导入规模
-
-| 原始文件 | 内容 | 原始行数 | 默认抽样后 |
-| --- | --- | ---: | ---: |
-| `user_info_format1.csv` | 用户画像：用户、年龄段、性别 | 424,170 | 7,712 |
-| `user_log_format1.csv` | 用户行为：商品、类目、商家、品牌、日期、动作类型 | 54,925,330 | 998,542 |
-| `train_format1.csv` | 训练集用户商家对与复购标签 | 260,864 | 4,700 |
-| `test_format1.csv` | 测试集用户商家对；官方 `prob` 列为空，等待模型预测 | 261,477 | 4,858 |
-
-抽样后的行为日期为 2014-05-11 至 2014-11-12，动作分布为：
-点击 881,857、加购 1,343、收藏 55,306、购买 60,036。
-
-### PostgreSQL 表设计
-
-| 分层 | 表 | 用途 |
-| --- | --- | --- |
-| 运行台账 | `tmall_ingestion_runs` | 记录文件哈希、抽样参数、状态、行数、耗时和受控错误分类 |
-| Silver | `tmall_users` | 抽样用户画像 |
-| Silver | `tmall_user_events` | 用户行为明细；仅供导入与汇总，不进入问数白名单 |
-| Silver | `tmall_repurchase_samples` | train/test 复购样本；test 的 `probability` 可空 |
-| Gold | `tmall_daily_metrics` | 日期 × 行为类型的事件数与用户数，共 696 行 |
-| Gold | `tmall_merchant_metrics` | 商家行为、购买用户与历史复购指标，共 4,991 行 |
-| Gold | `tmall_category_metrics` | 类目行为与购买用户指标，共 1,186 行 |
-| Gold | `tmall_user_metrics` | 用户活跃、购买商家数、复购与购买广度，共 7,712 行 |
-| Gold | `tmall_funnel_metrics` | click/cart/favorite/buy 的事件数、用户数和相对点击倍数，共 4 行 |
-| Gold | `tmall_repurchase_metrics` | train/test 样本及标签汇总，共 3 行 |
-
-Gold 表在每次导入时由 Silver 明细整表重算，并与 Silver 写入处于同一个事务。
-`--replace` 的清空、COPY 和 Gold 重算要么全部成功，要么全部回滚。
-智能问数只开放六张 Gold 表，避免模型查询单个用户的完整行为轨迹。
-
-### 建表 导入 验证
-
-下面的命令在 `backend/` 目录执行。`<zip-path>` 替换为本机的 `data_format1.zip` 路径。
-
-```powershell
-cd backend
-
-# 1. 建表
-python -m alembic upgrade head
-
-# 2. 只读扫描、校验和统计，不写数据库
-python scripts/ingest_tmall_data.py --zip "<zip-path>" --dry-run
-
-# 3. 正式导入默认稳定样本
-python scripts/ingest_tmall_data.py --zip "<zip-path>" --sample-modulus 55 --sample-residue 0 --batch-size 10000
-
-# 4. 核对规模、动作分布、日期、孤儿记录及 Gold/Silver 一致性
-python scripts/verify_tmall_data.py
-
-# 5. 可选：检查同一文件重复执行会安全跳过
-python scripts/verify_tmall_data.py --check-idempotency --zip "<zip-path>"
-
-# 6. 将零售和天猫知识文档递归切片并向量化入库
-python scripts/ingest_knowledge.py --dry-run
 python scripts/ingest_knowledge.py
 ```
 
-端到端冒烟脚本会在临时 schema 中执行 COPY、Gold 汇总和约束检查，最后整体回滚：
+### 4. 导入天猫数据
 
 ```powershell
-python scripts/smoke_tmall_pipeline.py
+python scripts/ingest_tmall_data.py --zip "<data_format1.zip 路径>" --dry-run
+python scripts/ingest_tmall_data.py --zip "<data_format1.zip 路径>" --sample-modulus 55 --sample-residue 0
+python scripts/verify_tmall_data.py
 ```
 
-完整操作与设计说明见：
+## 核心接口
+
+| 接口 | 用途 |
+| --- | --- |
+| `POST /api/v1/data/query` | 执行受控只读 SQL |
+| `POST /api/v1/agent/data-query` | 自然语言智能问数 |
+| `POST /api/v1/rag/answer` | 知识库问答 |
+| `POST /api/v1/rag/documents` | 上传并向量化知识文档 |
+| 经营分析接口 | 多步骤分析、SSE 过程和报告生成 |
+
+## 项目结构
+
+```text
+backend/
+  app/api/              FastAPI 路由
+  app/agent/            LangGraph 与经营分析编排
+  app/models/           零售、天猫和知识库 ORM
+  app/services/         数据导入、安全查询、RAG 与业务服务
+  alembic/              数据库迁移
+  knowledge_seed/       零售与天猫知识文档
+  scripts/              导入、验证和冒烟脚本
+  tests/                后端自动化测试
+frontend/
+  src/app/              Next.js 页面
+  src/features/         平台、架构与业务功能
+docker-compose.yml      PostgreSQL、后端和前端编排
+```
+
+## 面试时重点说明
+
+1. 结构化数据需要精确聚合，因此进入 PostgreSQL；业务口径需要语义检索，因此进入 pgvector。
+2. 用户级稳定抽样保证跨文件关联和单个用户行为完整，比随机行抽样更适合多表数据。
+3. 智能问数只查询 Gold 表，并通过双层 AST 校验和数据库只读事务限制模型生成的 SQL。
+4. `--replace` 的清空、COPY 和 Gold 重算在同一真实事务中，任何阶段失败都会整体回滚。
+5. RAG 使用向量与关键词双路召回，RRF 解决分数量纲差异，Reranker 再判断候选是否真正能回答问题。
+
+## 详细文档
 
 - [天猫数据接入运行手册](docs/tmall-data-pipeline-runbook.md)
-- [天猫数据接入面试讲解稿](docs/tmall-data-pipeline-interview.md)
-- [天猫数据导入与可询问问题清单](docs/天猫数据导入与可询问问题清单.docx)
-
-### 向量知识库内容
-
-天猫结构化明细不进入向量库。向量库只保存四份知识文档：业务背景、数据字典、指标口径、
-抽样与质量说明。当前天猫知识共 4 份文档、29 个切片；当前数据库合计 26 份知识文档、
-462 个切片。检索流程为查询改写、向量与关键词混合召回、RRF 融合、Reranker 精排和 Top-K 回答。
-
-### 可以询问的问题
-
-智能问数适合回答需要聚合计算的问题，例如：
-
-- 天猫每天的点击、收藏、加购和购买趋势如何？
-- 哪一天购买行为最多？双十一前后行为量有什么变化？
-- 点击、收藏、加购和购买分别有多少事件、多少用户？
-- 购买用户数最多的前 10 个商家有哪些？
-- 哪些商家的历史复购用户数或历史复购率最高？
-- 哪些商家点击很多但购买用户较少？
-- 购买用户数最多的前 10 个类目有哪些？
-- 哪些类目收藏或加购较高，但购买相对较低？
-- 有购买行为的用户有多少？购买过多个商家的用户有多少？
-- 同一商家至少购买两次的历史复购用户有多少？
-- train 与 test 分别有多少个复购样本？
-- train 中正样本有多少，正样本率是多少？
-
-知识库问答适合回答口径和规则，例如：
-
-- `action_type` 的 0、1、2、3 分别代表什么？
-- 为什么结构化数据进入 PostgreSQL，而指标说明进入向量库？
-- 用户级稳定抽样为什么不会破坏跨文件关联？
-- 历史复购、购买广度和 train 标签有什么区别？
-- 为什么 test 的 `probability` 是空值？
-- 为什么漏斗的 `user_rate` 可能大于 1？
-- 为什么不能把 buy 行数直接叫订单数？
-- 为什么天猫表和零售表不允许跨领域 JOIN？
-
-### 数据边界
-
-- 数据集没有金额、订单号和件数，不能回答 GMV、销售额、客单价或真实订单量。
-- 商品、商家、品牌和类目只有匿名 ID，不能回答名称、价格、地区或行业信息。
-- `buy` 表示购买行为记录，不等于一笔独立订单。
-- 没有 `session_id` 和严格的事件顺序，不能做真正的会话级路径漏斗。
-- `tmall_funnel_metrics.user_rate` 的分母固定为点击用户，它是相对点击的倍数，可能大于 1，不能直接显示成百分比。
-- 当前数据是约 1/55 的稳定样本，绝对数量只代表样本；比例与排行也不能直接外推为全量平台结论。
-
-## 数据服务：受控只读查询接口
-
-数据中台阶段的第 2 小步：提供一个受控的分析 SQL 查询服务，让调用方提交**经过严格限制的
-只读 SELECT**，拿到结构化结果。它属于**数据中台**，与 AI 中台无关——
-`app/services/safe_query.py` 不导入 `app.agent`、LangGraph 或任何模型 SDK，有测试用 AST 检查守住这条边界。
-
-### 接口
-
-```text
-POST /api/v1/data/query
-```
-
-请求：
-
-```json
-{
-  "sql": "SELECT date_dim.month, SUM(orders.net_amount) AS sales_amount FROM orders JOIN date_dim ON orders.date_id = date_dim.date_id GROUP BY date_dim.month ORDER BY date_dim.month LIMIT 12"
-}
-```
-
-响应：
-
-```json
-{
-  "columns": ["month", "sales_amount"],
-  "rows": [{ "month": 1, "sales_amount": 140892.02 }],
-  "row_count": 12,
-  "source": "postgres"
-}
-```
-
-`columns` 与 `rows` 中每个字典的键顺序一致，`row_count == len(rows)`，响应里**不含原始 SQL**。
-
-### 两条防线
-
-```text
-调用方 SQL
-→ 第 1 道：sqlglot AST 校验（validate_safe_select，纯函数）
-→ 第 2 道：PostgreSQL 只读事务 + statement/lock timeout（run_readonly_query）
-→ PostgreSQL
-→ 限制行数的结构化结果
-```
-
-第 2 道不是摆设：即使绕过第 1 道直接把 `DELETE FROM orders` 交给执行层，
-数据库也会以 `read_only_sql_transaction`（SQLSTATE 25006）拒绝，数据一行都不会变。
-
-`SET TRANSACTION READ ONLY` 必须是事务里的第一条语句——PostgreSQL 规定它前面若已执行过查询，
-只会发一个警告然后**静默忽略**只读设置，所以三条设置语句的顺序在代码里是固定的。
-
-### 允许的内容
-
-| 项 | 白名单 |
-| --- | --- |
-| 表 | 零售五张表；天猫六张 Gold 表 `tmall_daily_metrics` `tmall_merchant_metrics` `tmall_category_metrics` `tmall_user_metrics` `tmall_funnel_metrics` `tmall_repurchase_metrics` |
-| 函数 | `COUNT` `SUM` `AVG` `MIN` `MAX`（含 `COUNT(DISTINCT ...)`） |
-| 语句形态 | 单条 `SELECT`，`JOIN` / `WHERE` / `GROUP BY` / `ORDER BY` / `LIMIT` / `AS` 别名 |
-
-字段白名单登记在 `safe_query.py` 的 `ALLOWED_COLUMNS`，字段必须写完整表名
-（`orders.net_amount`，`net_amount` 会被拒绝）。`ORDER BY sales_amount` 这种引用输出别名的
-标准写法是允许的——别名只能指向已经校验过的投影。零售表和天猫表不能出现在同一条
-SQL 中，防止对时间、主体和口径互不相干的数据做出“能执行但没有业务意义”的关联。
-
-### 拒绝的内容
-
-`INSERT` / `UPDATE` / `DELETE` / `MERGE` / `DROP` / `ALTER` / `CREATE` / `TRUNCATE` / `GRANT` /
-`COPY` / `EXPLAIN`、多语句、SQL 注释、`SELECT *`、CTE、子查询、`UNION`、窗口函数、`CASE`、
-未登记的表（含 `information_schema` / `pg_catalog`）、未登记的字段、未限定表名的字段、
-白名单外的任何函数（`pg_sleep`、`current_setting`、`version()` 等）。
-
-`LIMIT` **必须存在**且为 1~200 的整数字面量，缺失即拒绝——服务端不替调用方补 LIMIT，
-否则调用方会误以为自己的查询没有上限。
-
-### 状态码
-
-| 场景 | 状态码 |
-| --- | ---: |
-| 合规查询执行成功 | 200 |
-| 请求体缺少 `sql` 或长度非法 | 422 |
-| SQL 未通过安全策略 | 422 |
-| 已通过安全校验但语句执行失败（字段类型不符、超时被取消等） | 400 |
-| 数据库不可用 | 503 |
-| 服务端配置缺失、结果无法安全序列化 | 500 |
-
-失败响应只回显**预定义的中文文案**（如「仅允许执行单条 SELECT 查询。」），
-不回显原始 SQL、连接串、密码或数据库异常原文。
-
-### 试一下
-
-```powershell
-# 趋势查询
-curl -s -X POST http://localhost:8000/api/v1/data/query `
-  -H "Content-Type: application/json" `
-  -d '{\"sql\":\"SELECT date_dim.month, SUM(orders.net_amount) AS sales_amount FROM orders JOIN date_dim ON orders.date_id = date_dim.date_id GROUP BY date_dim.month ORDER BY date_dim.month LIMIT 12\"}'
-
-# 危险语句：应返回 422
-curl -s -X POST http://localhost:8000/api/v1/data/query `
-  -H "Content-Type: application/json" -d '{\"sql\":\"DELETE FROM orders\"}'
-```
-
-接口与请求/响应模型可以在 http://localhost:8000/docs 中查看。
-
-### 安全边界（务必阅读）
-
-这是**本地开发原型**：接口**没有身份认证、没有权限控制、没有行级数据权限**，
-任何能访问 8000 端口的人都可以查询白名单表的白名单字段。
-
-生产环境必须补齐：身份认证、按用户/角色的表与字段授权、行级数据权限过滤、
-按调用方的限流与配额，以及把 SQL 审计写入独立通道（而不是普通应用日志）。
-本服务目前**故意不在普通日志里记录 SQL 原文**。
-
-## 智能问数 Agent 的数据来源
-
-数据中台阶段的第 3 小步：把 LangGraph 智能问数 Agent 的默认查询执行器从
-「模拟数据」换成「数据中台安全查询服务」，让它读真实 PostgreSQL。
-
-### 完整链路
-
-```text
-用户自然语言问题
-→ intake / understand_question（LLM 识别意图）
-→ discover_assets（检索已登记资产）
-→ generate_sql（LLM 生成 SQL 草稿）
-→ validate_sql（Agent 第 1 层 AST 校验）
-→ execute_query（await 执行器）
-     → query_execution.execute_real_query
-     → app.services.safe_query.execute_safe_query（第 2 层 AST 校验 + 只读事务）
-     → PostgreSQL 零售样例数据或天猫真实抽样数据
-→ explain_result（LLM 解读结果）
-→ suggest_visualization（纯规则给出图表建议）
-→ finish
-```
-
-### 三条边界
-
-| 边界 | 做法 |
-| --- | --- |
-| Agent 不直接连数据库 | 不导入 SQLAlchemy / asyncpg / repository，只调用 `execute_safe_query` |
-| 不经 HTTP 调用自己 | 同进程内直接调服务函数，不走 `localhost:8000` |
-| 两层 SQL 校验都保留 | Agent 的 `validate_sql` 管工作流与 repair；数据服务的校验管数据库 |
-
-有测试用 **AST 扫描** agent 包的全部 import 语句，确认它没有引入数据库驱动、
-HTTP 客户端或第二套连接；并确认整个 agent 包只有 `query_execution.py`
-一个模块接入数据服务。
-
-### 异步集成
-
-`execute_safe_query` 是异步的，所以 `execute_query` 是全图**唯一**的异步节点。
-LangGraph 只要图里有一个异步节点，就拒绝同步 `invoke()`：
-
-```text
-TypeError: No synchronous function provided to "execute_query"
-```
-
-因此图必须用 `await graph.ainvoke(...)` 驱动。其余节点保持同步不动——
-只把真正需要 I/O 的那个节点异步化，比把整张图改成 async 改动面小得多。
-测试端把 `asyncio.run(...)` 收在**唯一一个** `run_graph` 辅助函数里，
-不散落到几百个测试中（测试入口本身不在事件循环里，所以这样用是安全的）。
-
-### 数据来源标记
-
-`QueryResult.source` 只有两个取值：
-
-```text
-mock     内置模拟数据（结论会追加「基于模拟数据」说明）
-postgres 数据中台安全查询服务返回的真实数据（不追加该说明）
-```
-
-解释节点的系统提示词也按来源选择：真实数据那一版不会说「这些是模拟数据」，
-避免对着真实数据说出误导性的话。
-
-### 模拟执行器仍在
-
-`mock_query.py` 没有被删除，`execute_mock_query()` 也保持不变。它现在只用于
-单元测试和无数据库时的演示，入口是显式的：
-
-```python
-build_graph()                    # 生产：execute_real_query，读真实数据
-build_mock_data_query_graph()    # 演示/测试：execute_mock_query_async
-```
-
-生产图**不会**悄悄回退到 mock。
-
-### 真实数据库冒烟验证
-
-```powershell
-cd backend
-python tests/smoke_agent_real_query.py
-```
-
-脚本名不以 `test_` 开头，所以 pytest 不会收集它——**默认测试套件不依赖数据库**。
-它会用假的分类器 / SQL 生成器 / 解释器（因此不调用任何真实 LLM）+ 真实的
-`execute_safe_query` 跑完整条链路，并在前后各统计一次 orders 的行数与净销售额，
-证明整个过程没有改动样例数据。
-
-### 已知限制
-
-Agent 的 `validate_sql` 要求每个字段都带表名，因此 `ORDER BY <输出别名>`
-（例如 `ORDER BY sales_amount DESC`）会被判成「未限定表名」而拒绝——
-而数据服务那一层是允许别名引用的。模型很自然会写出这种写法，
-第一次校验会被拒、用掉唯一一次修复机会。
-
-绕过方式：把 `ORDER BY sales_amount` 写成 `ORDER BY SUM(orders.net_amount)`。
-本阶段按边界要求没有修改 Agent 的校验器，这条差异有专门的测试记录在案
-（`test_agent_validator_still_rejects_an_order_by_alias`）。
-
-## 智能问数接口（自然语言）
-
-第 4 小步：给前端提供自然语言问数入口。
-
-```text
-POST /api/v1/agent/data-query     ← 自然语言，给前端用
-POST /api/v1/data/query           ← 受控 SQL，给程序化调用方用
-```
-
-两者不是一回事：前者只收一句自然语言问题，SQL 的生成与校验全在 Agent 内部；
-后者直接收 SQL，由数据服务做白名单校验。
-
-### 完整链路
-
-```text
-浏览器 / 未来的 Next.js 页面
-→ FastAPI 路由（只做 HTTP 适配）
-→ await get_data_query_graph().ainvoke({"question": ...})
-→ LangGraph Agent（意图 → 资产 → 生成 SQL → 校验 → 执行 → 解释 → 图表）
-→ 数据中台 execute_safe_query()
-→ PostgreSQL 真实零售样例数据
-→ 路由筛选出安全字段
-→ JSON 响应
-```
-
-### 请求与响应
-
-请求：
-
-```json
-{ "question": "华东地区近六个月销售额趋势怎么样？" }
-```
-
-成功响应（HTTP 200）：
-
-```json
-{
-  "status": "ok",
-  "answer": "销售额整体呈上升趋势……",
-  "query_result": {
-    "columns": ["month", "sales_amount"],
-    "rows": [{ "month": 1, "sales_amount": 140892.02 }],
-    "row_count": 12,
-    "source": "postgres"
-  },
-  "chart_suggestion": {
-    "chart_type": "line",
-    "title": "销售额趋势",
-    "x_field": "month",
-    "y_field": "sales_amount",
-    "series_field": null,
-    "value_format": "currency",
-    "reason": "结果包含时间维度和销售额。"
-  },
-  "events": ["已接收问题", "已识别问题类型", "已匹配可用数据资产"]
-}
-```
-
-### 状态码
-
-| 场景 | HTTP | status |
-| --- | ---: | --- |
-| Agent 正常完成（含未知意图、无匹配资产、查询 0 行） | 200 | `ok` |
-| Agent 写入受控 `error`（意图识别失败、数据服务不可用等） | 200 | `error` |
-| 请求体不合法（缺 `question`、纯空白、超 500 字） | 422 | — |
-| 图执行抛异常 / 结果契约不合法 | 500 | — |
-
-**`error` 也是 200**：那是一个安全的、可以展示给用户的业务结果，不是 HTTP 层故障。
-只有「服务本身给不出任何回答」才是 500。
-
-### 不返回什么
-
-路由采用**白名单式**取字段，只读 `answer` / `query_result` / `chart_suggestion` / `events`。
-Agent State 里的这些一律不外发：
-
-| 字段 | 不外发的原因 |
-| --- | --- |
-| `sql_draft` | SQL 原文含表名字段名，属于实现细节 |
-| `sql_validation` | 校验问题原文同上 |
-| `matched_assets` | 内部资产目录结构 |
-| `retry_count` | 内部重试计数 |
-| `intent` | 内部意图枚举 |
-| `error` | 内部错误字段；它的安全文案已并入 `answer` |
-| `question` | 用户原始输入 |
-
-### events 为什么要重新映射
-
-Agent 内部事件形如 `"节点名：细节"`，细节里可能带用户问题全文、SQL 片段、
-字段名甚至异常类名——**不能假设它适合公开**。所以路由不复制原文，
-只按节点名查一张固定映射表：
-
-```text
-intake → 已接收问题        execute_query → 已完成数据查询
-understand_question → 已识别问题类型    explain_result → 已生成分析结论
-discover_assets → 已匹配可用数据资产    suggest_visualization → 已生成图表建议
-generate_sql → 已生成查询方案           finish → 分析流程已完成
-validate_sql → 已完成查询安全校验       repair_sql → 已尝试修复查询方案
-```
-
-未知前缀直接丢弃；保持原顺序；同一步骤重复出现（例如修复后再次校验）照原样保留。
-
-### 手动验证（会花一次模型调用，请自行决定）
-
-自动化测试**不调用真实 LLM**。想验证整条真实链路时：
-
-1. 打开 http://localhost:8000/docs
-2. 找到 `POST /api/v1/agent/data-query`，点 **Try it out**
-3. 输入 `{"question":"华东地区近六个月销售额趋势怎么样？"}`
-4. 点 **Execute**
-
-预期：HTTP 200、`status = ok`、`query_result.source = postgres`、
-`chart_suggestion.chart_type = line`、`answer` 里没有「模拟数据」说明，
-`events` 是上面那串简短流程文案。
-
-如果模型配置不可用，会返回 `status = error` 加一句受控说明，
-不会泄露配置内容。
-
-## 知识库问答（RAG 检索增强）
-
-智能问数那条链路回答的是「数字是多少」，这条链路回答的是「口径怎么算、规则怎么定」。
-它把业务文档切片、向量化入库，检索出最相关的几段，再让模型**只依据这几段**作答。
-
-### 完整链路
-
-```text
-用户原问题
-  → ① 查询改写 Query Rewrite        原问题 + 最多两条改写 + 关键词
-  → ② 多路召回
-        向量检索（pgvector 余弦距离）      语义相近的切片
-        关键词检索（标题/小节/关键词/别名/search_text）  术语与小节标题的精确命中
-  → ③ RRF 融合去重                  只用名次融合，最多 20 条候选
-  → ④ Reranker 精排（qwen3-rerank）  交叉编码逐条打分，取最终 top-k 条
-  → ⑤ 生成回答                      只依据最终切片作答，附来源
-  → ⑥ 前端展示                      回答 + 来源 + 可展开的检索过程
-```
-
-### 每一段为什么存在
-
-| 阶段 | 它解决什么问题 |
-| --- | --- |
-| 查询改写 | 用户问「一单平均花多少钱」，文档里写的是「客单价 = 平均每笔订单的实付金额」——口语与书面表达之间的差距靠一次改写补上。**改写只用于召回**，最终回答仍针对原问题 |
-| 向量检索 | 语义召回：问法和文档用词完全不同也能找到（「会员回购」找到「复购率」） |
-| 关键词检索 | 语义检索对精确术语不敏感：字段名、表名、小节标题、别名必须能**精确命中**。中文两个字的关键词凑不满三元组，所以这一路以精确匹配和 ILIKE 包含为主，pg_trgm 只作模糊补充 |
-| RRF 融合 | 两路的分数**量纲不同**（余弦距离 vs 命中层级分），不能相加。RRF 只用名次：被多路同时命中的切片自然排前面，只在一路排第一的排在后面 |
-| Reranker | 前四步判的都是「像不像」。交叉编码把问题和候选**拼在一起**逐条判断「这段答不答这个问题」，比双塔准得多，代价是每条候选都要过一次模型——所以只用在 20 条候选上，不是全库 |
-| 生成回答 | 只复述最终切片里写过的内容；资料不足时用固定文案说明，不编 |
-
-### 降级：每一层都自己兜底
-
-这条链路的每一步都是「增益」而不是「必需」，所以任何一步失败都不会让问答不可用：
-
-| 失败的东西 | 表现 | 结果 |
-| --- | --- | --- |
-| 改写模型 | 超时 / 限流 / 输出畸形 | 退回「只用原问题」，链路继续 |
-| 向量召回 | embedding 接口不可用 | 保留关键词结果 |
-| 关键词召回 | SQL 出错 | 保留向量结果 |
-| 两路都失败 | 检索基础设施不可用 | 返回 **503**（而不是假装「没有相关资料」） |
-| Reranker | 超时 / 429 / 5xx / 响应畸形 | 退回 RRF 顺序，来源照常返回 |
-| 配置缺失 | 例如没填精排 Key | **直接报配置错误**——部署问题必须当场暴露，不能和「服务挂了」混成同一个现象 |
-
-关掉改写（`RAG_QUERY_REWRITE_ENABLED=false`）或精排（`RAG_RERANK_ENABLED=false`）都能正常问答，
-只是少一层增益；**关掉精排时不需要填精排的 Key**。
-
-### 可观测：前端能展开看检索过程
-
-来源列表会标出每条是**向量召回 / 关键词召回 / 混合召回**，以及是否**已精排**；
-答案下方有一个默认收起的「查看检索过程」，展开后是五个阶段的实际统计：
-
-```text
-查询扩展 → 检索表达 → 初选候选 → 相关性精排 → 最终采用
-已扩展      3 条表达    20 条候选    已执行       5 条资料
-```
-
-页面只渲染后端真正给出的数字：某一步没有数据就不显示，也不编。
-来源里的分数（向量相似度、融合分、关键词分、精排分）都标注为「只用于本次请求内的排序」——
-它们**不是**答案置信度：量纲不同、只在同一次请求内可比、也没有做过校准。
-
-### 相关路径与命令
-
-| 类型 | 位置 |
-| --- | --- |
-| 页面 | `/applications/knowledge-qa`（知识问答）、`/data/sources`（数据采集：上传与文档列表） |
-| 接口 | `POST /api/v1/rag/answer`、`GET /api/v1/rag/documents`、`POST /api/v1/rag/documents` |
-
-上传支持 `md` / `txt` / `docx` / `pdf`。PDF 的标题层级靠字号启发式推断，
-**扫描件（图片型 PDF）没有文字层，暂不支持**，需要后续接 OCR。
-
-```powershell
-# 后端全量测试（不需要数据库、不调真实模型）
-.\.venv\Scripts\python.exe -m pytest backend -q
-
-# 前端检查
-cd frontend; npm run lint; npx tsc --noEmit; npm run build; cd ..
-
-# 冒烟脚本（按需执行，部分会花真实调用）
-python backend/scripts/smoke_embedding.py                          # embedding 配置是否调得通
-python backend/scripts/smoke_knowledge_search.py                   # 向量召回质量，人工核对
-python backend/scripts/backfill_knowledge_metadata.py --dry-run     # 检索元数据回填，不花钱
-python backend/scripts/smoke_reranker.py                           # 精排接口是否调得通
-```
-
-### 已知局限
-
-- 当前数据库快照为 26 份文档、462 条切片，其中天猫知识为 4 份文档、29 条切片。向量检索仍使用**精确顺序扫描**（不建近似索引）；等切片上千后再评估 HNSW/IVFFlat，检索接口不需要改变。
-- 查询改写与精排各增加一次外部模型调用，意味着更多时延与费用；两者都可以用开关关掉。
-- 检索分数只反映「本次请求内的排序」，不是答案正确率。
-- PDF 标题识别是启发式的；扫描件需要 OCR。
-- 知识问答与智能问数目前是两条独立链路，前者不走 Agent 图。
-
-## 前端交互页面
-
-四个页面会真实调用后端：
-
-```text
-http://localhost:3000/data/sources                   数据采集：上传知识文档、查看已入库列表
-http://localhost:3000/applications/knowledge-qa       知识问答：问业务口径，检索知识文档
-http://localhost:3000/applications/data-query         智能问数：自然语言提问，查业务数据
-http://localhost:3000/applications/business-analysis  经营分析：Deep Agents 多轮拆解、工具调用与报告生成
-```
-
-### Deep Agents 经营分析助手
-
-这是本项目新增的上层业务 Agent，不是单独下载的桌面软件，也不是复制官方 `dcode` 终端。
-它使用 `deepagents==0.7.18` 作为 Agent Harness，运行在现有 FastAPI 服务中；前端是
-Next.js 页面，通过 SSE 实时展示 Agent 的状态、工具调用和报告增量。
-
-```text
-用户目标
-  → Deep Agent Loop（拆解目标、选择工具、根据结果继续循环）
-      ├─ analyze_business_data → 现有 LangGraph 问数图 → SQL AST 校验 → 只读查询
-      ├─ search_business_knowledge → pgvector / 混合检索 → 促销规则与业务文档
-      ├─ get_metric_definition → 指标口径检索
-      └─ save_analysis_report → 结构化报告落库
-  → SSE 事件 → 经营分析工作台
-```
-
-它解决的是“需要多步分析”的问题：例如先比较区域趋势，再下钻品类贡献，最后结合促销
-规则输出证据、原因、建议和风险。Deep Agent 只负责规划和循环，数据查询仍经过原有
-安全 LangGraph，不允许新增数据库旁路。
-
-关键工程能力：
-
-- `LangGraph Checkpoint + PostgreSQL`：同一 `thread_id` 可以继续追问，刷新后恢复运行上下文。
-- `PostgreSQL Store + business_analysis_memories`：保存白名单用户偏好（币种、区域、图表、报告风格）。
-- 上下文压缩：大工具结果只保留摘要、行数和 Artifact ID，避免无界增长上下文窗口。
-- 运行治理：最大 Agent 步数、工具调用次数、单次超时、同线程并发保护。
-- 安全事件：对外 SSE 只返回固定事件和摘要，不返回 SQL、密钥、Prompt 或内部异常。
-
-当前作品集版本的并发保护是单进程内存锁，匿名 UUID 也不是生产身份认证；如果部署多副本，
-应把线程锁升级为 PostgreSQL advisory lock/分布式锁，并接入登录身份、租户隔离和权限校验。
-
-本地运行经营分析页面前，先执行数据库迁移并启动后端、前端：
-
-```powershell
-cd backend
-python -m alembic upgrade head
-uvicorn app.main:app --reload --loop app.core.event_loop:selector_loop_factory
-
-# 另一个终端
-cd frontend
-npm run dev
-```
-
-Windows 本地启动命令中保留 `selector_loop_factory`：LangGraph PostgreSQL
-Checkpoint/Store 使用的 `psycopg` 异步连接不兼容 Windows 默认 Proactor 事件循环。
-
-访问 `http://localhost:3000/applications/business-analysis`。作品集阶段的用户标识由浏览器
-生成匿名 UUID，只用于演示会话记忆，不能当作生产身份认证。
-
-三者共用同一套请求约定：首次打开不发请求、请求可取消、取消与失败分开展示、
-响应做结构校验、模型输出按纯文本渲染。下面以智能问数为例说明。
-
-另外两页不需要后端即可打开，内容全部来自前端静态配置：
-
-```text
-http://localhost:3000/data/warehouse                  数据仓库：五张样例表、表关系、数据入口
-http://localhost:3000/architecture                    技术栈与架构：技术栈、系统结构、数据流转
-http://localhost:3000/ai/agents                        Agent 中心：已跑通的问数流程
-http://localhost:3000/ai/knowledge                     知识库与 RAG：切片、向量化与检索
-```
-
-### 以智能问数为例
-
-输入一句中文问题，页面会调用 `POST /api/v1/agent/data-query`，展示分析结论、
-图表建议、明细表（含数据来源与行数）、可折叠的执行记录，以及需要时附带的
-知识库参考资料。样例数据覆盖 2025 全年，所以示例问题都写明了年份——
-问「最近六个月」在样例数据上查不到东西。
-
-### 跨端启动（必须前后端同时在跑）
-
-页面要拿到数据，两个服务都得在：
-
-```powershell
-# 1. 数据库 + 后端 + 前端
-docker compose up -d
-
-# 2. 确认三端都能访问
-http://localhost:3000/applications/data-query   前端页面
-http://localhost:8000/docs                      后端接口文档
-http://localhost:8000/api/v1/health             后端与数据库状态
-```
-
-### 为什么需要 CORS
-
-前端在 `localhost:3000`、后端在 `localhost:8000`，**端口不同就是跨域**。
-浏览器会在真正发请求之前先发一个 `OPTIONS` 预检，后端不明确放行就会整个被拦掉，
-页面连一个字节的响应都拿不到。
-
-后端只放行本地开发的两个来源：
-
-```text
-http://localhost:3000
-http://127.0.0.1:3000
-```
-
-刻意**不用 `["*"]`**（通配符等于允许任意站点带着浏览器里的凭据调用本服务），
-方法只开 `GET/POST/OPTIONS`，请求头只开 `Content-Type`，且不开
-`allow_credentials`。这份名单是本地开发用的，生产环境应由部署配置或
-受控的允许列表管理。
-
-### 前端如何定位后端
-
-前端不写死 IP，而是拿当前页面的协议和主机名拼上 8000 端口：
-
-```text
-在 http://localhost:3000   打开 → 请求 http://localhost:8000/api/v1/agent/data-query
-在 http://127.0.0.1:3000   打开 → 请求 http://127.0.0.1:8000/api/v1/agent/data-query
-```
-
-这样既不会把某台机器的 IP 固化进代码，也顺带满足了上面的 CORS 白名单
-（按来源逐个列出，写死 IP 反而会被拦）。
-
-### 页面边界
-
-```text
-当前使用本地零售样例数据与天猫 IJCAI 2015 公开数据的稳定抽样，不是企业生产数据
-每次提问都会调用配置的模型服务，请不要输入敏感信息
-口径与规则类问题会转交给知识库链路作答（见「知识库问答（RAG 检索增强）」）
-尚未接入用户权限与会话记忆
-```
-
-页面首次打开**不会**发起任何请求；只有点击「开始分析」或按
-`Ctrl / Cmd + Enter` 才会提交。请求可以取消，取消、失败、空结果各有独立展示。
-
-## 本地启动前端
-
-前端是独立的 Next.js 工程，与后端分开启动。
-
-```powershell
-cd frontend
-npm install      # 首次克隆后执行一次
-npm run dev
-```
-
-访问 http://localhost:3000，开发服务默认使用 3000 端口，支持热更新。
-
-停止服务：在运行 `npm run dev` 的终端按 `Ctrl+C`。
-
-生产构建：
-
-```powershell
-npm run build    # 生成产物到 .next/
-npm run start    # 以生产模式启动，需先 build
-```
-
-### 当前前端状态
-
-前端已完成工程初始化并容器化（见 `frontend/Dockerfile`），共有**四个会调用后端接口的
-交互页面**：
-
-| 页面 | 地址 | 调用的接口 |
-| --- | --- | --- |
-| 数据采集 | `/data/sources` | `POST` / `GET /api/v1/rag/documents` |
-| 知识问答 | `/applications/knowledge-qa` | `POST /api/v1/rag/answer` |
-| 智能问数 | `/applications/data-query` | `POST /api/v1/agent/data-query` |
-| 经营分析 | `/applications/business-analysis` | Deep Agents 经营分析接口与运行状态流 |
-
-其余页面（数据仓库、技术栈与架构、Agent 中心、知识库与 RAG）都是**由前端静态配置
-渲染的说明页**，不请求接口，因此不启动后端也能正常打开。
-
-前端只保留已经真实可用的模块。业务中台四个中心、数据治理、指标中心、数据服务、
-模型与 Prompt、工作流与工具、AI 运营、经营驾驶舱都不在导航里——它们既没有实现，
-也不该有一个点进去空空如也的入口。
-
-这些页面都**在首次打开时不发起分析请求**，只有用户主动操作后才会提交。
-
-顶栏的「检查服务」按钮会调用 `GET /api/v1/health`，只探测后端进程与数据库连接，
-**不自动轮询**；它不覆盖模型服务与 embedding 服务是否可用。
-
-前端自己的说明（设计令牌、目录结构、改造约定）见 `frontend/README.md`。
-
-## 本地环境注意事项
-
-- 项目使用 `zoneinfo` 处理时区，Windows 系统不自带时区数据库，
-  因此 `requirements.txt` 中显式依赖 `tzdata`，请勿删除。
-- `.env` 已被 `.gitignore` 忽略，请勿提交真实密钥或数据库密码。
-- 数据库密码如果含有 `$` 符号，在 `.env` 中要写成 `$$`，
-  否则 Docker Compose 会把它当成变量插值而解析出错。
-- `DATABASE_URL` 的驱动部分必须写成 `postgresql+asyncpg://`，**不能只写 `postgresql://`**。
-  后端用的是异步 SQLAlchemy，环境里只装了 asyncpg；写成 `postgresql://` 时 SQLAlchemy
-  会去找从未安装的同步驱动 psycopg2，报错信息也不会指向真正原因。
-- 数据库主机名取决于后端跑在哪里，**两种跑法用的是两个不同的变量**：
-
-  后端跑在 Windows 宿主机时使用 `DATABASE_URL`，数据库主机名为 `localhost`；
-  后端跑在 Docker Compose 时使用 `DATABASE_URL_DOCKER`，数据库主机名为 `postgres`。
-  两者不能混用，因为容器中的 `localhost` 只代表容器自身。
-
-  两个变量都写在项目根目录的 `.env` 里，`.env.example` 只提供不含真实密钥的示例值。
-  `.env` 已被 `.gitignore` 忽略，请勿提交。
-- embedding（RAG 用）与对话模型**分开配置**，走 `EMBEDDING_*` 五个变量，默认指向
-  阿里云百炼的 OpenAI 兼容模式（`text-embedding-v4`）。`EMBEDDING_DIMENSION`
-  必须同时与 `EMBEDDING_MODEL` 的实际输出维度和 pgvector 建表时的 `vector(N)` 一致，
-  改任一处都要同步改另外三处（还有模型里的 `KNOWLEDGE_EMBEDDING_DIMENSIONS`），
-  否则会在入库或建索引时才报错。配置是否调得通，用
-  `python backend/scripts/smoke_embedding.py` 验证。
-- 检索增强另有七个变量（`.env.example` 里有完整注释）：
-
-  | 变量 | 作用 | 缺省 |
-  | --- | --- | --- |
-  | `RAG_QUERY_REWRITE_ENABLED` | 是否在检索前做查询改写 | `true` |
-  | `RAG_MAX_REWRITTEN_QUERIES` | 最多生成几条改写（合法范围 0~2） | `2` |
-  | `RAG_RERANK_ENABLED` | 是否做精排 | `true` |
-  | `RAG_RETRIEVAL_CANDIDATE_LIMIT` | 精排接收的候选上限（1~20） | `20` |
-  | `RAG_FINAL_TOP_K` | 最终交给回答模型的条数 | `5` |
-  | `RERANK_PROVIDER` / `RERANK_MODEL` | 精排供应商与模型 | `dashscope` / `qwen3-rerank` |
-  | `RERANK_API_KEY` / `RERANK_BASE_URL` / `RERANK_TIMEOUT_SECONDS` | 精排的密钥、业务空间地址与超时 | 空 / 空 / `10` |
-
-  **精排默认开启，所以要么把 `RERANK_*` 配全，要么显式设 `RAG_RERANK_ENABLED=false`。**
-  只关掉开关时不校验这几个供应商字段——「想临时关掉」不该因为少一个 Key 而做不到。
-  `RERANK_BASE_URL` 只填到 `/compatible-api/v1` 为止，**不要带 `/reranks` 结尾**（代码会自己拼）。
-  这些变量在 `docker-compose.yml` 里逐条透传给 backend 容器：容器内没有 `.env`
-  （它在 `.dockerignore` 里），配置只能靠那里注入。
-
-## 开发路线
-
-- [x] 阶段一：最小可运行后端（FastAPI + Agent + 模型接入）
-- [x] 阶段二：工程骨架整理，分层目录落地
-- [x] 阶段三：Docker Compose 与 PostgreSQL 本地环境
-- [x] 阶段三·补：SQLAlchemy 异步引擎接入与数据库连接自检（`/health/db`）
-- [x] 阶段四：Next.js + TypeScript 前端工程初始化（占位首页）
-- [x] 阶段四·补：三服务容器化（后端/前端生产镜像 + Compose 健康依赖链 + 统一健康检查 `/api/v1/health`）
-- [x] 阶段五：Alembic 初始化配置与零售样例数仓（五张表 + 幂等种子数据 + 只读验证脚本）
-- [x] 阶段五·补：数据服务受控只读查询接口（AST 安全校验 + 只读事务 + 结构化结果，POST `/api/v1/data/query`）
-- [x] 阶段五·补：智能问数 Agent 接入真实数据（默认执行器改为数据中台服务，mock 保留供测试）
-- [x] 阶段五·补：自然语言智能问数接口（POST `/api/v1/agent/data-query`，await 生产 Agent 图）
-- [x] 阶段九：前端问数工作台（`/applications/data-query`：输入、加载、取消、结论、执行过程、明细表、SVG/CSS 图表）
-- [x] RAG-13.1：通用查询改写（原问题保留 + 最多两条改写 + 关键词，模型失败退回原问题）
-- [x] RAG-13.2：知识切片检索元数据表结构（keywords / aliases / search_text + pg_trgm + GIN 索引）
-- [x] RAG-13.3：动态生成检索元数据（入库时提取，存量切片幂等回填）
-- [x] RAG-13.4：混合检索与 RRF（向量 + 关键词两路召回，按 chunk_id 去重融合，最多 20 条候选）
-- [x] RAG-13.5：可插拔精排（百炼 `qwen3-rerank`，供应商故障退回 RRF 顺序）
-- [x] RAG-13.6：接入正式知识问答链路（改写 → 混合召回 → 精排 → 回答，含检索摘要）
-- [x] RAG-13.7：前端展示检索过程与召回方式
-- [x] 天猫 IJCAI 2015：真实 ZIP 流式导入、稳定抽样、Silver/Gold 分层、幂等与原子覆盖、校验脚本和领域隔离
-- [x] 阶段六：代码化数据目录与指标语义层（零售/天猫领域路由、指标公式、字段说明与数据集限制）
-- [x] 阶段七：安全 SQL 生成与查询执行（双层 AST 校验、只读事务、表字段白名单、跨领域 JOIN 拦截）
-- [ ] 阶段八：运行记录与可观测性
-
-后续可做：把知识问答与智能问数合成一条链路（同一个问题既能查数也能查口径）、
-知识库文档权限、会话记忆，以及切片规模上千后的向量索引与检索质量评测。
+- [天猫数据接入面试讲解](docs/tmall-data-pipeline-interview.md)
+- [天猫数据与可询问问题清单](docs/天猫数据导入与可询问问题清单.docx)
+- [前端说明](frontend/README.md)
+
+## 当前边界
+
+- 项目使用公开数据与本地样例数据，不是企业生产系统。
+- 尚未接入企业身份认证、租户隔离和细粒度数据权限。
+- 天猫数据没有金额、订单号、商品名称、地区和 session，相关问题不会强行推断。
+- 外部模型调用需要自行配置 API Key，并可能产生费用。

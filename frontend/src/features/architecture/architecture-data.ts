@@ -562,7 +562,7 @@ const workflows: WorkflowDefinition[] = [
 ];
 
 export const ARCHITECTURE_MODEL: ArchitectureModel = {
-  title: "AI 数据智能平台技术与业务全景",
+  title: "InsightFlow 数据智能平台技术与业务全景",
   subtitle: "从工程底座、数据与模型资源到 Agent 编排和当前业务应用",
   layers,
   nodes,

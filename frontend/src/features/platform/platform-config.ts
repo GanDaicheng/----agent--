@@ -11,7 +11,7 @@
  */
 
 /** 平台身份。全站只有这一处，其它页面一律引用，不重复写字面量。 */
-export const PLATFORM_NAME = "AI 数据智能平台";
+export const PLATFORM_NAME = "InsightFlow 数据智能平台";
 export const PLATFORM_TAGLINE = "面向多业务场景的数据资产与智能应用平台";
 /** 首页 Hero 上的小标签。 */
 export const PLATFORM_BADGE = "作品集演示 · 多业务可扩展";

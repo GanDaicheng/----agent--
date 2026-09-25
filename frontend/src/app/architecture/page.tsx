@@ -12,7 +12,7 @@ import styles from "./architecture.module.css";
 
 export const metadata: Metadata = {
   title: "技术与业务全景",
-  description: "AI 数据智能平台当前技术分层、平台能力、Agent 编排与业务链路全景。",
+  description: "InsightFlow 数据智能平台的技术分层、智能编排与业务链路全景。",
 };
 
 export default function Page() {
