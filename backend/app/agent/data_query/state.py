@@ -19,7 +19,16 @@ import operator
 from typing import Annotated, Literal, TypedDict
 
 # 问题意图。加新意图时改这里一处，类型检查会把所有需要同步处理的地方都指出来。
-Intent = Literal["trend", "ranking", "breakdown", "repurchase", "unknown"]
+#
+# funnel 是天猫领域特有的：它问的是「各行为环节有多少人」，来源是
+# tmall_funnel_metrics。零售数仓没有对应的结构（订单表里没有行为序列），
+# 所以零售问题不会走到这个意图上。
+Intent = Literal["trend", "ranking", "breakdown", "repurchase", "funnel", "unknown"]
+
+# 数据领域。决定后面允许查哪些表——判错的后果不是「答得不好」，
+# 而是「拿天猫的行为数去解释零售的销售额」，一个不会报错的错误答案。
+# 路由规则见 domain.py。
+Domain = Literal["retail", "tmall"]
 
 
 class MatchedAsset(TypedDict, total=False):
@@ -143,6 +152,10 @@ class DataQueryState(TypedDict, total=False):
 
     # ---- 理解阶段 ----
     intent: Intent  # 问题意图。understand_question 写，generate_sql 读
+    # 数据领域。discover_assets 写（按问题文本路由），SQL 生成与校验读。
+    # 它是「这个问题属于哪个数据集」的落点：资产检索按它过滤，
+    # SQL 校验用它拒绝跨领域 JOIN。
+    domain: Domain
     matched_assets: list[MatchedAsset]  # discover_assets 写，generate_sql 读
 
     # ---- SQL 阶段 ----

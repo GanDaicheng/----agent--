@@ -333,14 +333,32 @@ def parse_markdown_document(path: Path) -> list[KnowledgeChunk]:
 
 
 def knowledge_document_paths(directory: Path) -> list[Path]:
-    """列出目录下的 Markdown 文件，按文件名排序。
+    """列出目录下（含子目录）的 Markdown 文件，按相对路径排序。
 
-    固定按文件名排序是为了让切片输出稳定：同一批文档每次跑出的 chunk 顺序一致，
-    hash 才有可比性，入库脚本的幂等判断也才成立。
+    为什么改成递归？知识库现在按领域分目录（`retail/`、`tmall/`），
+    而入库脚本只接收一个目录参数。不递归的话，要么给每个领域各跑一次
+    入库脚本（两份配置、两次调用、迟早漏掉一个），要么把天猫文档塞进
+    `retail/`（分类就错了）。递归扫描让「知识种子目录」重新成为一个整体。
+
+    排序键用**相对路径**而不是文件名：文件名相同、目录不同的两份文档
+    （比如两个领域各有一份 `metrics.md`）在只按文件名排时顺序不确定，
+    而切片顺序必须稳定——入库脚本的幂等判断建立在内容 hash 之上，
+    顺序抖动会让每次运行都判定成「文档变了」。
+    对只有一层文件的目录，相对路径排序与按文件名排序结果完全一致，
+    所以既有行为没有变化。
     """
+    if not directory.is_dir():
+        return []
+
+    def sort_key(path: Path) -> str:
+        try:
+            return path.relative_to(directory).as_posix()
+        except ValueError:  # pragma: no cover - rglob 的结果一定在 directory 下
+            return path.name
+
     return sorted(
-        (path for path in directory.glob("*.md") if path.is_file()),
-        key=lambda path: path.name,
+        (path for path in directory.rglob("*.md") if path.is_file()),
+        key=sort_key,
     )
 
 

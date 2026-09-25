@@ -31,7 +31,7 @@ from app.services.knowledge_chunking import (  # noqa: E402
     load_knowledge_chunks,
 )
 
-DEFAULT_DIRECTORY = _BACKEND_DIR / "knowledge_seed" / "retail"
+DEFAULT_DIRECTORY = _BACKEND_DIR / "knowledge_seed"
 
 # 预览长度。80 个字符足够看出这是什么内容，又不至于把终端刷爆。
 PREVIEW_CHARS = 80

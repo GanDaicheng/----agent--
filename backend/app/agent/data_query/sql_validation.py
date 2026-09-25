@@ -28,6 +28,7 @@ from sqlglot.errors import ParseError
 from app.agent.data_query.catalog import DATASETS
 from app.agent.data_query.constants import MAX_SQL_LIMIT
 from app.agent.data_query.state import MatchedAsset, SqlValidation
+from app.services.data_domains import cross_domain_violation, describe_domains
 
 # 固定按 PostgreSQL 方言解析。用别的方言解析会改变语法规则
 # （比如 MySQL 的反引号和 LIMIT x,y），校验结论就不可信了。
@@ -173,6 +174,20 @@ def validate_sql_draft(
     # 11. 表必须来自已匹配的数据集
     allowed_fields = _matched_dataset_fields(matched_assets)
     alias_to_dataset: dict[str, str] = {}
+
+    # 先做跨领域检查，再逐表检查授权。
+    # 顺序很重要：`orders JOIN tmall_user_metrics` 里两张表**都在**目录里，
+    # 授权检查会全部放行，SQL 语法也完全合法——它算出来的数字把 2014 年的
+    # 行为记录和 2025 年的订单金额连在一起，没有业务含义，而且不会报任何错。
+    # 只有这条规则能把它拦下来，所以它必须先跑，且报的是「跨领域」而不是
+    # 某个表未授权——后者会把修复方向指到完全错误的地方。
+    referenced = {table.name.lower() for table in tree.find_all(exp.Table)}
+    violation = cross_domain_violation(referenced)
+    if violation is not None:
+        issues.append(
+            f"禁止跨领域关联查询：{describe_domains(violation)}"
+            f" 的时间范围与业务口径互不通用。"
+        )
 
     for table in tree.find_all(exp.Table):
         if table.db or table.catalog:

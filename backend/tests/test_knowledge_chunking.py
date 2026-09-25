@@ -26,13 +26,15 @@ from app.services.knowledge_chunking import (
     chunk_hash,
     clean_markdown_body,
     estimate_token_count,
+    knowledge_document_paths,
     load_knowledge_chunks,
     normalize_section_title,
     parse_markdown_document,
     split_oversized_section,
 )
 
-REAL_DOCS_DIR = pathlib.Path(__file__).resolve().parents[1] / "knowledge_seed" / "retail"
+KNOWLEDGE_SEED_DIR = pathlib.Path(__file__).resolve().parents[1] / "knowledge_seed"
+REAL_DOCS_DIR = KNOWLEDGE_SEED_DIR / "retail"
 
 REAL_DOCUMENT_NAMES = {
     "member_rules.md",
@@ -440,6 +442,107 @@ def test_load_knowledge_chunks_ignores_non_markdown_files(tmp_path):
     chunks = load_knowledge_chunks(tmp_path)
 
     assert {chunk.source_file for chunk in chunks} == {"a.md"}
+
+
+# --------------------------------------------------------------------------
+# 递归扫描：知识库按领域分了子目录
+# --------------------------------------------------------------------------
+
+
+def test_documents_in_subdirectories_are_picked_up(tmp_path):
+    """知识种子目录按领域分成了 retail/ 和 tmall/ 两个子目录。
+
+    入库脚本只接收一个目录参数，所以扫描必须递归——否则要么给每个领域
+    各跑一次入库（两份配置、迟早漏一个），要么把天猫文档塞进 retail/（分类就错了）。
+    """
+    write_doc(tmp_path, "top.md", "# T\n\n## 1. 小节\n\n正文。\n")
+    nested = tmp_path / "领域a"
+    nested.mkdir()
+    write_doc(nested, "nested.md", "# N\n\n## 1. 小节\n\n正文。\n")
+
+    chunks = load_knowledge_chunks(tmp_path)
+
+    assert {chunk.source_file for chunk in chunks} == {"top.md", "nested.md"}
+
+
+def test_recursive_scan_order_is_deterministic_by_relative_path(tmp_path):
+    """排序键必须是相对路径，不能是文件名。
+
+    顺序抖动会让入库脚本每次都判定成「文档变了」——它的幂等判断建立在
+    切片内容 hash 之上，而 hash 是按顺序拼出来的。
+    """
+    first = tmp_path / "a领域"
+    second = tmp_path / "b领域"
+    first.mkdir()
+    second.mkdir()
+    write_doc(second, "same.md", "# B\n\n## 1. 小节\n\n正文。\n")
+    write_doc(first, "same.md", "# A\n\n## 1. 小节\n\n正文。\n")
+
+    paths = knowledge_document_paths(tmp_path)
+
+    assert [path.parent.name for path in paths] == ["a领域", "b领域"]
+    # 跑两次结果必须完全一致
+    assert knowledge_document_paths(tmp_path) == paths
+
+
+def test_flat_directory_order_is_unchanged_by_the_recursive_scan(tmp_path):
+    """只有一层文件时，递归扫描的结果必须与原来的按文件名排序完全一致。
+
+    这是回归保护：改成递归不能改变知识库原有的切片顺序，
+    否则所有既有文档的 hash 都会变，下一次入库会整篇重写。
+    """
+    write_doc(tmp_path, "c.md", "# C\n\n## 1. 小节\n\n正文。\n")
+    write_doc(tmp_path, "a.md", "# A\n\n## 1. 小节\n\n正文。\n")
+    write_doc(tmp_path, "b.md", "# B\n\n## 1. 小节\n\n正文。\n")
+
+    names = [path.name for path in knowledge_document_paths(tmp_path)]
+
+    assert names == ["a.md", "b.md", "c.md"]
+
+
+def test_missing_directory_yields_no_documents(tmp_path):
+    """目录不存在时返回空列表，而不是抛异常。
+
+    扫描函数是纯的、不负责报错；「目录不存在」由脚本层判断并给出提示。
+    """
+    assert knowledge_document_paths(tmp_path / "不存在") == []
+
+
+def test_real_knowledge_base_has_no_duplicate_file_names():
+    """**跨目录的文件名不能重复。**
+
+    文档在数据库里以 `source_file`（也就是纯文件名）为键。
+    两个不同领域各有一份 `metrics.md` 的话，后入库的那份会覆盖前一份，
+    而且两边的切片会混在同一个文档下——内容看起来还在，来源却错了。
+    这条断言让「加文档时撞名」在测试里就暴露，而不是等到检索结果开始串味。
+    """
+    names = [path.name for path in knowledge_document_paths(KNOWLEDGE_SEED_DIR)]
+    duplicates = sorted({name for name in names if names.count(name) > 1})
+
+    assert not duplicates, f"知识库里出现了重名文档：{duplicates}"
+
+
+def test_real_knowledge_base_covers_both_domains():
+    """两个领域的文档都要在扫描范围内，各自的规模也要合理。"""
+    by_domain: dict[str, int] = {}
+    for path in knowledge_document_paths(KNOWLEDGE_SEED_DIR):
+        by_domain[path.parent.name] = by_domain.get(path.parent.name, 0) + 1
+
+    assert by_domain.get("retail", 0) >= 5
+    assert by_domain.get("tmall", 0) >= 4
+
+
+def test_real_tmall_documents_are_small_enough_for_direct_retrieval():
+    """天猫文档也要保持「一个小节一个切片」，与零售文档同一标准。
+
+    超长小节会被二次切分，切出来的片段失去小节标题的上下文，
+    检索命中率会下降。这条断言是给未来的自己看的。
+    """
+    chunks = load_knowledge_chunks(KNOWLEDGE_SEED_DIR / "tmall")
+
+    assert chunks, "天猫知识文档一个切片都没有"
+    oversized = [chunk for chunk in chunks if chunk.char_count > MAX_SECTION_CHARS]
+    assert not oversized, f"出现超长切片：{[(c.source_file, c.section_title) for c in oversized]}"
 
 
 # --------------------------------------------------------------------------

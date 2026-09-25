@@ -489,11 +489,106 @@ def test_whitelist_matches_models():
 
 
 def test_only_whitelisted_tables_are_reachable():
-    """默认拒绝：白名单里只有这五张业务表。"""
+    """默认拒绝：白名单里只有零售 5 张业务表 + 天猫 6 张 Gold 表。
+
+    这张清单是**权限边界**的落地，不是配置细节。任何一张表加进来，
+    都意味着 LLM 生成的 SQL 可以查它。加表必须是一次有意识的决定，
+    所以这里用「相等」而不是「包含」。
+    """
     assert set(safe_query.ALLOWED_COLUMNS) == {
+        # 零售领域
         "customers",
         "products",
         "regions",
         "date_dim",
         "orders",
+        # 天猫领域：只有 Gold 汇总表
+        "tmall_daily_metrics",
+        "tmall_merchant_metrics",
+        "tmall_category_metrics",
+        "tmall_user_metrics",
+        "tmall_funnel_metrics",
+        "tmall_repurchase_metrics",
     }
+
+
+@pytest.mark.parametrize(
+    "table",
+    [
+        "tmall_user_events",
+        "tmall_users",
+        "tmall_repurchase_samples",
+        "tmall_ingestion_runs",
+    ],
+)
+def test_tmall_detail_tables_are_not_reachable(table):
+    """天猫明细表一张都不能进白名单。
+
+    这是整条权限设计的核心：只要 tmall_user_events 可查，
+    任何 LLM 生成的 SQL 就能把**某一个用户的完整行为轨迹**拉出来。
+    把它留在白名单之外，「模型能不能看到用户级明细」这个问题
+    在表这一层就有答案，不依赖提示词、也不依赖模型的自觉。
+    """
+    assert table not in safe_query.ALLOWED_COLUMNS
+
+    result = safe_query.validate_safe_select(
+        f"SELECT {table}.event_count FROM {table} LIMIT 10"
+    )
+    assert not result["passed"]
+    assert safe_query.ISSUE_UNAUTHORIZED_TABLE in result["issues"]
+
+
+def test_tmall_gold_tables_are_queryable():
+    """Gold 表必须真的能查——挡住明细不等于把整个天猫领域也挡掉了。"""
+    result = safe_query.validate_safe_select(
+        "SELECT tmall_daily_metrics.metric_date,"
+        "       SUM(tmall_daily_metrics.event_count)"
+        " FROM tmall_daily_metrics"
+        " GROUP BY tmall_daily_metrics.metric_date"
+        " LIMIT 50"
+    )
+    assert result["passed"], result["issues"]
+
+
+def test_cross_domain_join_is_rejected():
+    """`orders JOIN tmall_user_metrics` 两张表都在白名单里，语法完全合法。
+
+    这个查询算出来的数字把 2014 年的行为记录和 2025 年的订单金额连在一起，
+    没有业务含义，而且**不报任何错**。必须由跨领域规则显式拒绝。
+    """
+    result = safe_query.validate_safe_select(
+        "SELECT orders.order_no, tmall_user_metrics.event_count"
+        " FROM orders"
+        " JOIN tmall_user_metrics ON tmall_user_metrics.user_id = orders.customer_id"
+        " LIMIT 10"
+    )
+    assert not result["passed"]
+    assert safe_query.ISSUE_CROSS_DOMAIN in result["issues"]
+
+
+def test_cross_domain_check_does_not_fire_within_one_domain():
+    retail = safe_query.validate_safe_select(
+        "SELECT orders.order_no FROM orders"
+        " JOIN customers ON customers.customer_id = orders.customer_id"
+        " LIMIT 10"
+    )
+    assert safe_query.ISSUE_CROSS_DOMAIN not in retail["issues"]
+
+    tmall = safe_query.validate_safe_select(
+        "SELECT tmall_daily_metrics.metric_date"
+        " FROM tmall_daily_metrics"
+        " JOIN tmall_funnel_metrics ON tmall_funnel_metrics.action_type ="
+        " tmall_daily_metrics.action_type"
+        " LIMIT 10"
+    )
+    assert safe_query.ISSUE_CROSS_DOMAIN not in tmall["issues"]
+
+
+def test_cross_domain_check_is_silent_for_unknown_tables():
+    """未登记的表已经因为「未授权」被拒，再报一条跨领域只会让 issues 变长。"""
+    result = safe_query.validate_safe_select(
+        "SELECT orders.order_no, some_other_table.x FROM orders"
+        " JOIN some_other_table ON some_other_table.x = orders.order_id LIMIT 10"
+    )
+    assert safe_query.ISSUE_UNAUTHORIZED_TABLE in result["issues"]
+    assert safe_query.ISSUE_CROSS_DOMAIN not in result["issues"]

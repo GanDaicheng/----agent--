@@ -41,9 +41,11 @@ from pydantic import BaseModel
 
 from app.agent.data_query.constants import (
     MAX_SQL_RETRY,
+    NODE_DISCOVER_ASSETS,
     NODE_KNOWLEDGE_ANSWER,
     NODE_SEARCH_KNOWLEDGE,
 )
+from app.agent.data_query.domain import route_domain
 from app.agent.data_query.intent import IntentClassification, classify_intent
 from app.agent.data_query.knowledge import (
     KnowledgeAnswerer,
@@ -78,6 +80,7 @@ from app.agent.data_query.state import (
 )
 from app.agent.data_query.tools import search_datasets, search_metrics
 from app.agent.data_query.visualization import suggest_chart
+from app.services.data_domains import DOMAIN_RETAIL
 from app.services.rag_answer import answer_from_knowledge as produce_knowledge_answer
 
 # 对外的统一失败文案。刻意写得笼统：用户看到的是「过一会儿再试」，
@@ -734,9 +737,13 @@ def suggest_visualization(
         }
 
     intent = state.get("intent") or "unknown"
+    # 领域只影响「用哪张图表规则表」，不影响图表类型集合——
+    # 前端协议仍然是 line / bar / table / none。
+    # 没有领域信息时退回零售规则表，这是本模块加入之前唯一存在的行为。
+    domain = state.get("domain") or DOMAIN_RETAIL
 
     try:
-        suggestion = chart_suggester(intent=intent, query_result=query_result)
+        suggestion = chart_suggester(intent=intent, query_result=query_result, domain=domain)
     except Exception as exc:
         # 只写异常类名。图表模块是纯本地的，正常不会抛异常；
         # 真抛了多半是有人改坏了规则表，异常原文里可能带着内部结构，
@@ -803,22 +810,35 @@ def discover_assets(state: DataQueryState) -> dict:
 
     question = (state.get("question") or "").strip()
 
+    # 领域路由放在检索**之前**：两个领域的资产绝不能同时出现在 matched_assets 里，
+    # 否则模型就有机会写出 `orders JOIN tmall_user_metrics` 这种
+    # 语法合法、数字荒谬、还不会报错的 SQL。检索阶段就过滤掉，
+    # 比等到 SQL 校验再拦要早得多，也便宜得多。
+    routing = route_domain(question)
+
     metrics = search_metrics.invoke({"query": question})
     datasets = search_datasets.invoke({"query": question})
 
     # 指标在前、数据集在后：指标是业务口径，读起来更重要
     matched_assets = [*metrics, *datasets]
 
+    # 领域信息折进已有的那条事件里，**不额外多加一条**。
+    # 事件流的长度是下游（前端、测试、事件计数）依赖的形状，
+    # 为了一条诊断信息把它撑长，代价远大于收益。
+    prefix = f"{NODE_DISCOVER_ASSETS}：领域 {routing.domain}——"
+
     if not matched_assets:
         return {
+            "domain": routing.domain,
             "matched_assets": [],
-            "events": ["discover_assets：未匹配到已登记的数据资产"],
+            "events": [f"{prefix}未匹配到已登记的数据资产"],
         }
 
     return {
+        "domain": routing.domain,
         "matched_assets": matched_assets,
         "events": [
-            f"discover_assets：匹配到 {len(metrics)} 个指标和 {len(datasets)} 个数据集"
+            f"{prefix}匹配到 {len(metrics)} 个指标和 {len(datasets)} 个数据集"
         ],
     }
 

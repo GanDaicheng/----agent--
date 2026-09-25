@@ -149,16 +149,22 @@ def test_migration_declares_no_branches_or_dependencies():
 
 
 def test_migration_is_the_single_alembic_head():
-    """新版迁移必须成为唯一的 head，否则 upgrade head 不知道该走哪条。"""
+    """整个项目必须只有一个 head，否则 upgrade head 不知道该走哪条。
+
+    这条断言每加一次迁移都要跟着改一次，而且**是故意这么设计的**：
+    它逼着加迁移的人在合并前确认一次「链是直的，没有出现分叉」。
+    head 变成新的那个，本身就说明新迁移挂对了位置。
+    """
     from alembic.config import Config
     from alembic.script import ScriptDirectory
 
     config = Config(str(ALEMBIC_INI))
     heads = ScriptDirectory.from_config(config).get_heads()
 
-    # The business-analysis persistence migration is now the project head and
-    # depends on this RAG metadata migration.
-    assert list(heads) == ["20260924ba02"]
+    # 迁移链：e205344666e8（零售）→ 69e6c2579c1b（知识库）→ 1e96e0de0042（RAG 元数据）
+    #        → 20260924ba01（经营分析）→ 20260924ba02（运行标题）
+    #        → bea2b5793f31（天猫 IJCAI 2015）
+    assert list(heads) == ["bea2b5793f31"]
 
 
 # --------------------------------------------------------------------------

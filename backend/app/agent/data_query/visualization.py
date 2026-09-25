@@ -25,6 +25,7 @@ from app.agent.data_query.state import (
     QueryResult,
     ValueFormat,
 )
+from app.services.data_domains import DOMAIN_RETAIL, DOMAIN_TMALL
 
 
 class _ChartRule(NamedTuple):
@@ -78,6 +79,41 @@ _CHART_RULES: dict[str, _ChartRule] = {
 }
 
 
+# 天猫领域的图表规则。**图表类型仍然是 line / bar / table，没有新增前端协议。**
+#
+# 为什么天猫要单独一张表，而不是复用上面那张？
+# 因为字段名完全不同：天猫没有 sales_amount / member_level，只有
+# event_count / user_count / action_type / metric_date。
+# 复用会让每一条天猫结果都落到 FALLBACK_CHART（表格）——
+# 不报错，但用户永远看不到图。
+#
+# 只登记两条**字段名可以钉死**的规则：
+# - funnel 的来源是 tmall_funnel_metrics，列名就是 action_type / user_count；
+# - trend  的来源是 tmall_daily_metrics，列名就是 metric_date / event_count。
+# 其余情况（商家排行、类目对比）刻意不登记：那些查询的列名取决于模型怎么起别名
+# （merchant_id 还是 商家id 还是 seller），写死一个只会经常失配。
+# 让它们落到 table 是**诚实**的降级——表格也是受支持的图表类型，
+# 而且不会有「猜错列名导致前端取不到值」的风险。
+_TMALL_CHART_RULES: dict[str, _ChartRule] = {
+    "funnel": _ChartRule(
+        chart_type="bar",
+        title="天猫行为漏斗",
+        x_field="action_type",
+        y_field="user_count",
+        value_format="number",
+        reason="结果包含行为类型与去重用户数，适合使用柱状图比较各环节的人数。",
+    ),
+    "trend": _ChartRule(
+        chart_type="line",
+        title="天猫行为量趋势",
+        x_field="metric_date",
+        y_field="event_count",
+        value_format="number",
+        reason="结果包含日期与行为量，适合使用折线图展示随时间的变化。",
+    ),
+}
+
+
 # 没有数据可画。注意这**不是错误**：查询成功执行了，只是没有匹配的数据，
 # 这是一条有效的业务结论，和「系统出错」完全是两回事。
 EMPTY_CHART: ChartSuggestion = {
@@ -102,8 +138,22 @@ FALLBACK_CHART: ChartSuggestion = {
 }
 
 
-def suggest_chart(*, intent: Intent, query_result: QueryResult) -> ChartSuggestion:
-    """按意图查规则表，返回图表建议。
+def chart_rules_for_domain(domain: str) -> dict[str, _ChartRule]:
+    """取某个领域的图表规则表（副本，调用方改不动内部状态）。
+
+    未知领域退回零售那张表，而不是返回空表：领域是个新概念，
+    任何还没同步更新的调用方都应该得到「按零售规则试一下」这个行为，
+    而不是突然所有图都变成表格。
+    """
+    if domain == DOMAIN_TMALL:
+        return dict(_TMALL_CHART_RULES)
+    return dict(_CHART_RULES)
+
+
+def suggest_chart(
+    *, intent: Intent, query_result: QueryResult, domain: str = DOMAIN_RETAIL
+) -> ChartSuggestion:
+    """按「领域 + 意图」查规则表，返回图表建议。
 
     三条出口，优先级从高到低：
 
@@ -117,13 +167,16 @@ def suggest_chart(*, intent: Intent, query_result: QueryResult) -> ChartSuggesti
     降级成 table 是承认「这次我们不确定」，这比编一个看起来合理的答案诚实得多，
     也安全得多。
 
+    领域参数**只影响用哪张规则表，不影响图表类型集合**：
+    仍然是 line / bar / table / none，前端协议一个字都没变。
+
     返回的 dict 每次都新建一份，不把模块级常量直接交出去：
     调用方拿到后随手改一下，绝不能污染后续所有请求。
     """
     if (query_result.get("row_count") or 0) <= 0:
         return {**EMPTY_CHART}
 
-    rule = _CHART_RULES.get(intent)
+    rule = chart_rules_for_domain(domain).get(intent)
     if rule is None:
         return {**FALLBACK_CHART}
 

@@ -38,7 +38,7 @@ from app.services.knowledge_ingestion import (  # noqa: E402
     ingest_knowledge,
 )
 
-DEFAULT_DIRECTORY = _BACKEND_DIR / "knowledge_seed" / "retail"
+DEFAULT_DIRECTORY = _BACKEND_DIR / "knowledge_seed"
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -49,7 +49,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "directory",
         nargs="?",
         default=str(DEFAULT_DIRECTORY),
-        help=f"知识文档目录，默认 {DEFAULT_DIRECTORY}",
+        help=(
+            f"知识文档目录，默认 {DEFAULT_DIRECTORY}（递归扫描子目录，"
+            "所以每个领域的文档可以各自放在 retail/ 、tmall/ 下面）"
+        ),
     )
     parser.add_argument(
         "--dry-run",
