@@ -19,6 +19,8 @@ type Props = {
   boundaryTone?: "info" | "warning";
   /** 边界的标签文案。 */
   boundaryLabel?: string;
+  /** 页头内容对齐方式。应用演示页可用居中，强调业务入口与执行链路。 */
+  align?: "start" | "center";
 };
 
 /**
@@ -39,9 +41,10 @@ export function PageHeader({
   boundary,
   boundaryTone = "info",
   boundaryLabel = "使用边界",
+  align = "start",
 }: Props) {
   return (
-    <header className={styles.header}>
+    <header className={styles.header} data-align={align}>
       <nav className={styles.breadcrumb} aria-label="面包屑">
         <Link href="/">平台总览</Link>
         {sectionName ? (

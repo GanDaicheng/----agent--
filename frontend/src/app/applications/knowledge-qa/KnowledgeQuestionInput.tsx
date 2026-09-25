@@ -21,7 +21,12 @@ type Props = {
   busy: boolean;
   topK: number;
   onTopKChange: (value: number) => void;
-  examples: readonly string[];
+  examples: readonly ExampleGroup[];
+};
+
+export type ExampleGroup = {
+  label: string;
+  items: readonly string[];
 };
 
 /** top_k 的可选值。用下拉而不是数字输入框：不给用户输入非法值的机会。 */
@@ -135,23 +140,23 @@ export function KnowledgeQuestionInput({
       </div>
 
       <div className={styles.examples}>
-        <p className={styles.examplesLabel}>
-          示例问题（点击只填入输入框，不会自动提交）
-        </p>
-        <ul className={styles.exampleList}>
-          {examples.map((example) => (
-            <li key={example}>
-              <button
-                type="button"
-                className={styles.example}
-                onClick={() => onChange(example)}
-                disabled={busy}
-              >
-                {example}
-              </button>
-            </li>
+        <p className={styles.examplesLabel}>示例问题（点击只填入输入框，不会自动提交）</p>
+        <div className={styles.exampleGroups}>
+          {examples.map((group) => (
+            <section key={group.label} className={styles.exampleGroup} aria-labelledby={`kq-example-${group.label}`}>
+              <h3 id={`kq-example-${group.label}`} className={styles.exampleGroupTitle}>{group.label}</h3>
+              <ul className={styles.exampleList}>
+                {group.items.map((example) => (
+                  <li key={example}>
+                    <button type="button" className={styles.example} onClick={() => onChange(example)} disabled={busy}>
+                      {example}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </section>
           ))}
-        </ul>
+        </div>
       </div>
     </section>
   );

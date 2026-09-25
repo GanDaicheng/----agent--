@@ -12,7 +12,12 @@ type Props = {
   onClear: () => void;
   /** 请求进行中：输入框与所有按钮都不可用，避免重复提交。 */
   busy: boolean;
-  examples: readonly string[];
+  examples: readonly ExampleGroup[];
+};
+
+export type ExampleGroup = {
+  label: string;
+  items: readonly string[];
 };
 
 /**
@@ -95,23 +100,23 @@ export function QuestionInput({
       </div>
 
       <div className={styles.examples}>
-        <p className={styles.examplesLabel}>
-          示例问题（点击只填入输入框，不会自动提交）
-        </p>
-        <ul className={styles.exampleList}>
-          {examples.map((example) => (
-            <li key={example}>
-              <button
-                type="button"
-                className={styles.example}
-                onClick={() => onChange(example)}
-                disabled={busy}
-              >
-                {example}
-              </button>
-            </li>
+        <p className={styles.examplesLabel}>示例问题（点击只填入输入框，不会自动提交）</p>
+        <div className={styles.exampleGroups}>
+          {examples.map((group) => (
+            <section key={group.label} className={styles.exampleGroup} aria-labelledby={`dq-example-${group.label}`}>
+              <h3 id={`dq-example-${group.label}`} className={styles.exampleGroupTitle}>{group.label}</h3>
+              <ul className={styles.exampleList}>
+                {group.items.map((example) => (
+                  <li key={example}>
+                    <button type="button" className={styles.example} onClick={() => onChange(example)} disabled={busy}>
+                      {example}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </section>
           ))}
-        </ul>
+        </div>
       </div>
     </section>
   );

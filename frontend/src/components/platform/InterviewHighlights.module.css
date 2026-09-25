@@ -1,0 +1,82 @@
+/*
+ * 面试视角区块。
+ *
+ * 两段用同一种卡片语言，但上层（价值）用主色顶边、下层（亮点）用中性边框——
+ * 前者是结论，后者是支撑结论的证据，权重不同。
+ */
+
+.wrapper {
+  display: flex;
+  flex-direction: column;
+}
+
+.subTitle {
+  margin: 0;
+  font-size: var(--text-base);
+  font-weight: var(--weight-semibold);
+  color: var(--text);
+}
+
+.subTitle:not(:first-child) {
+  margin-top: var(--space-7);
+}
+
+.valueList,
+.highlightList {
+  display: grid;
+  gap: var(--space-3);
+  margin: var(--space-4) 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.valueList {
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+}
+
+.highlightList {
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+}
+
+.valueCard {
+  padding: var(--space-4);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-top: 3px solid var(--primary);
+  border-radius: var(--radius-sm);
+}
+
+.valueTitle {
+  margin: 0;
+  font-size: var(--text-base);
+  font-weight: var(--weight-semibold);
+  color: var(--text);
+}
+
+.valueDetail {
+  margin: var(--space-2) 0 0;
+  font-size: var(--text-sm);
+  line-height: var(--leading-relaxed);
+  color: var(--text-muted);
+}
+
+.highlightCard {
+  padding: var(--space-4);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.highlightTitle {
+  margin: 0;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+  color: var(--text);
+}
+
+.highlightDetail {
+  margin: var(--space-2) 0 0;
+  font-size: var(--text-xs);
+  line-height: var(--leading-relaxed);
+  color: var(--text-muted);
+}

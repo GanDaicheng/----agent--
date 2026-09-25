@@ -14,6 +14,7 @@ import {
 
 import { QueryResultPanel } from "./QueryResultPanel";
 import { QuestionInput } from "./QuestionInput";
+import type { ExampleGroup } from "./QuestionInput";
 import styles from "./data-query.module.css";
 
 /** 一次提问的完整状态。用有限状态而不是几个布尔量，避免出现「既在加载又已出错」。 */
@@ -23,7 +24,7 @@ const FALLBACK_ERROR = "智能问数请求失败，请稍后重试。";
 
 type Props = {
   /** 示例问题由页面（服务端组件）传入，保持它可序列化。 */
-  examples: readonly string[];
+  examples: readonly ExampleGroup[];
 };
 
 /**

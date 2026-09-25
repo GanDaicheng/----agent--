@@ -1,18 +1,25 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 
+import { ApplicationCapabilityCard } from "@/components/platform/ApplicationCapabilityCard";
+import { BusinessWorkflowCard } from "@/components/platform/BusinessWorkflowCard";
 import { DataSourceNote } from "@/components/platform/DataSourceNote";
-import { StatusBadge } from "@/components/platform/StatusBadge";
-import { WorkflowChain } from "@/components/platform/WorkflowChain";
+import { InterviewHighlights } from "@/components/platform/InterviewHighlights";
+import { PlatformHero } from "@/components/platform/PlatformHero";
+import { PlatformPipeline } from "@/components/platform/PlatformPipeline";
+import { TechnologyStackMap } from "@/components/platform/TechnologyStackMap";
+import { ARCHITECTURE_MODEL } from "@/features/architecture/architecture-data";
 import {
-  PLATFORM_BADGE,
+  OVERVIEW_APPLICATIONS,
+  OVERVIEW_TECH_LAYERS,
+  PROJECT_BOUNDARY_INTRO,
+  PROJECT_BOUNDARY_ITEMS,
+  getTechNodesByLayer,
+} from "@/features/platform/overview-config";
+import {
+  PAGE_HREFS,
   PLATFORM_NAME,
-  PLATFORM_SECTIONS,
-  PLATFORM_TAGLINE,
-  RETAIL_DATA_NOTE,
-  getOverviewEntries,
 } from "@/features/platform/platform-config";
-import { DOCUMENT_CHAIN, QUERY_CHAIN } from "@/mocks/platform-overview";
 
 import styles from "./page.module.css";
 
@@ -24,139 +31,123 @@ export const metadata: Metadata = {
 /**
  * 平台总览。
  *
- * 只讲已经跑通的东西。这里刻意**不显示**模块建设数量、完成度百分比、
- * 未完成模块清单——面试官需要的是「这个平台能做什么」，
- * 而不是「还有多少没做」。建设中/未建立的部分放在各模块自己的页面里说明。
+ * 这一页要回答的是「这个平台解决什么问题、中间经过哪些能力、最后产出什么」，
+ * 所以顺序是：一句话说清定位 → 一张主链路图 → 能点的业务入口 → 三条流程细节
+ * → 技术栈 → 面试视角 → 边界。
+ *
+ * 两处刻意为之：
+ * 1. **边界放最后**。它不是不存在，而是不该成为面试官的第一印象。
+ * 2. **不出现任何建设进度、完成率**。这不是一张进度表，是一个能用的平台。
+ *
+ * 数据来源分三处，都有各自的理由：
+ * - 本页叙事（Hero、主链路、业务卡片、亮点）→ overview-config
+ * - 技术分层、节点职责、三条流程 → ARCHITECTURE_MODEL（与架构页共用一份）
+ * - 平台名与路径 → platform-config
  */
 export default function Home() {
-  const entries = getOverviewEntries();
+  const techGroups = OVERVIEW_TECH_LAYERS.map((layer) => ({
+    id: layer.id,
+    order: layer.order,
+    title: layer.title,
+    description: layer.description,
+    nodes: getTechNodesByLayer(layer.id),
+  }));
 
   return (
     <div className={styles.page}>
-      <section className={styles.hero}>
-        <p className={styles.badge}>{PLATFORM_BADGE}</p>
-        <h1 className={styles.heroTitle}>{PLATFORM_NAME}</h1>
-        <p className={styles.heroSubtitle}>{PLATFORM_TAGLINE}</p>
-        <p className={styles.heroNote}>{RETAIL_DATA_NOTE}</p>
-      </section>
+      <PlatformHero />
 
-      {/* 三个核心功能排在最前：进这个页面的人多半是来用功能的 */}
-      <section className={styles.section}>
+      <section className={styles.section} aria-labelledby="pipeline-title">
         <div className={styles.sectionHead}>
-          <h2 className={styles.sectionTitle}>三个核心功能</h2>
+          <h2 className={styles.sectionTitle} id="pipeline-title">
+            平台主链路
+          </h2>
           <p className={styles.sectionNote}>
-            都已可交互，点卡片直接进入。
+            从业务文档与业务数据出发，经过采集入库、RAG 检索与 Agent 编排，
+            最终交付可追溯的结论与报告。每一个可跳转的环节都指向真实页面。
           </p>
         </div>
 
-        <ul className={styles.entryGrid}>
-          {entries.map((entry) => (
-            <li key={entry.key}>
-              <Link href={entry.href} className={styles.entryCard}>
-                <span className={styles.entrySection}>{entry.sectionName}</span>
-                <span className={styles.entryTitle}>{entry.moduleName}</span>
-                <span className={styles.entryDesc}>{entry.desc}</span>
-                <span className={styles.entryAction}>
-                  进入<span aria-hidden="true"> →</span>
-                </span>
-              </Link>
-            </li>
+        <PlatformPipeline />
+      </section>
+
+      <section className={styles.section} aria-labelledby="applications-title">
+        <div className={styles.sectionHead}>
+          <h2 className={styles.sectionTitle} id="applications-title">
+            四个业务入口
+          </h2>
+          <p className={styles.sectionNote}>
+            都可以直接点开使用。每张卡片写明它解决什么问题、吃什么、怎么处理、产出什么。
+          </p>
+        </div>
+
+        <ul className={styles.appGrid}>
+          {OVERVIEW_APPLICATIONS.map((entry) => (
+            <ApplicationCapabilityCard key={entry.id} entry={entry} />
           ))}
         </ul>
       </section>
 
-      {/* 按层级组织的能力视图：每张卡里是这个层级的模块与它们的已完成能力 */}
-      <section className={styles.section}>
+      <section className={styles.section} aria-labelledby="workflows-title">
         <div className={styles.sectionHead}>
-          <h2 className={styles.sectionTitle}>平台能力</h2>
+          <h2 className={styles.sectionTitle} id="workflows-title">
+            三条业务流程
+          </h2>
           <p className={styles.sectionNote}>
-            按数据中台、AI 中台、智能应用三层组织。卡片里的能力清单都对应真实实现。
+            平台上有三条独立链路，分别处理文档知识、结构化数据和复杂经营目标。
+            点某一步可以高亮它，展开可以看到每个阶段在做什么。
           </p>
-          <DataSourceNote label="职责与能力清单来自前端配置" />
         </div>
 
-        <div className={styles.layerGrid}>
-          {PLATFORM_SECTIONS.map((section) => (
-            <article
-              key={section.id}
-              className={styles.layerCard}
-              data-layer={section.id}
-            >
-              <header className={styles.layerHead}>
-                <h3 className={styles.layerName}>{section.name}</h3>
-                <StatusBadge status={section.status} size="sm" />
-              </header>
-              <p className={styles.layerDuty}>{section.duty}</p>
-
-              <ul className={styles.moduleList}>
-                {section.modules.map((module) => {
-                  const live = module.livePage;
-                  const body = (
-                    <>
-                      <span className={styles.moduleName}>{module.name}</span>
-                      <span className={styles.moduleSummary}>{module.summary}</span>
-                      <ul className={styles.capList}>
-                        {module.current.map((item) => (
-                          <li key={item}>{item}</li>
-                        ))}
-                      </ul>
-                      {live ? (
-                        <span className={styles.moduleAction}>
-                          进入 {live.label}
-                          <span aria-hidden="true"> →</span>
-                        </span>
-                      ) : null}
-                    </>
-                  );
-
-                  return (
-                    <li key={module.slug}>
-                      {live ? (
-                        // 整张卡可点。链接里包着一段说明文字，所以用 aria-label
-                        // 给出简洁的可访问名称，避免读屏把整段清单念成链接名。
-                        <Link
-                          href={live.href}
-                          className={styles.moduleCard}
-                          aria-label={`进入${live.label}`}
-                        >
-                          {body}
-                        </Link>
-                      ) : (
-                        <div className={styles.moduleCard}>{body}</div>
-                      )}
-                    </li>
-                  );
-                })}
-              </ul>
-            </article>
+        <div className={styles.workflowGrid}>
+          {ARCHITECTURE_MODEL.workflows.map((workflow) => (
+            <BusinessWorkflowCard key={workflow.id} workflow={workflow} />
           ))}
         </div>
       </section>
 
-      <section className={styles.section}>
+      <section className={styles.section} aria-labelledby="tech-title">
         <div className={styles.sectionHead}>
-          <h2 className={styles.sectionTitle}>两条真实链路</h2>
+          <h2 className={styles.sectionTitle} id="tech-title">
+            技术栈分层
+          </h2>
           <p className={styles.sectionNote}>
-            平台上有两条独立的数据通路，各自负责不同性质的问题。
+            五层从上到下是依赖顺序。点任意技术节点，可以看到它的作用、输入输出、
+            被哪些业务使用，以及对应的页面或接口。
           </p>
+          <DataSourceNote label="技术分层与节点职责与「技术栈与架构」页共用同一份数据源" />
         </div>
 
-        <div className={styles.chainGrid}>
-          <WorkflowChain
-            title="链路一 · 文档变成可检索的知识"
-            steps={DOCUMENT_CHAIN}
-            headingLevel="h3"
-          />
-          <WorkflowChain
-            title="链路二 · 问题变成分析结论"
-            steps={QUERY_CHAIN}
-            headingLevel="h3"
-          />
+        <TechnologyStackMap groups={techGroups} />
+      </section>
+
+      <section className={styles.section} aria-labelledby="interview-title">
+        <div className={styles.sectionHead}>
+          <h2 className={styles.sectionTitle} id="interview-title">
+            面试视角
+          </h2>
         </div>
+
+        <InterviewHighlights />
+      </section>
+
+      {/* 边界放最后并压低视觉权重：它需要被读到，但不该是这一页的重点 */}
+      <section className={styles.boundary} aria-labelledby="boundary-title">
+        <h2 className={styles.boundaryTitle} id="boundary-title">
+          当前边界与后续扩展方向
+        </h2>
+        <p className={styles.boundaryIntro}>{PROJECT_BOUNDARY_INTRO}</p>
+
+        <ul className={styles.boundaryList}>
+          {PROJECT_BOUNDARY_ITEMS.map((item) => (
+            <li key={item}>{item}</li>
+          ))}
+        </ul>
       </section>
 
       <footer className={styles.footer}>
-        各模块的详细说明见左侧导航；技术栈与系统结构见「技术栈与架构」。
+        各业务入口的详细说明见左侧导航；数据模型、技术分层与完整架构见
+        <Link href={PAGE_HREFS.architecture}>技术栈与架构</Link>。
       </footer>
     </div>
   );

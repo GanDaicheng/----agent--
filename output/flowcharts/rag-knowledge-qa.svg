@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="auto" viewBox="0 0 1600 900" preserveAspectRatio="xMidYMid meet">
+  <rect width="1600" height="900" fill="#f8fafc"/>
+  <text x="100" y="100" font-family="Arial,'Microsoft YaHei',sans-serif" font-size="42" font-weight="700" fill="#0f172a">RAG知识问答</text>
+  <text x="100" y="145" font-family="Arial,'Microsoft YaHei',sans-serif" font-size="21" fill="#64748b">从知识入库到带来源回答的可追溯链路（独立预览，尚未接入页面）</text>
+  <rect x="100" y="200" width="1400" height="230" rx="24" fill="#ffffff" stroke="#dbe4f0" stroke-width="2"/>
+  <text x="140" y="250" font-family="Arial,'Microsoft YaHei',sans-serif" font-size="22" font-weight="700" fill="#1e40af">用户查询链路</text>
+  <g font-family="Arial,'Microsoft YaHei',sans-serif" text-anchor="middle">
+    <g fill="#eff6ff" stroke="#3b82f6" stroke-width="2">
+      <rect x="140" y="295" width="190" height="82" rx="16"/><rect x="395" y="295" width="190" height="82" rx="16"/>
+      <rect x="650" y="295" width="190" height="82" rx="16"/><rect x="905" y="295" width="190" height="82" rx="16"/>
+      <rect x="1160" y="295" width="260" height="82" rx="16" fill="#ecfdf5" stroke="#0f766e"/>
+    </g>
+    <g font-size="22" font-weight="700" fill="#0f172a"><text x="235" y="345">用户问题</text><text x="490" y="345">问题改写</text><text x="745" y="345">混合召回</text><text x="1000" y="345">RRF + Rerank</text><text x="1290" y="345">带来源回答</text></g>
+    <g font-size="16" fill="#475569"><text x="235" y="369">业务口径 / 规则</text><text x="490" y="369">query expansion</text><text x="745" y="369">向量 + 关键词</text><text x="1000" y="369">qwen3-rerank</text><text x="1290" y="369">答案 + 证据</text></g>
+  </g>
+  <g stroke="#94a3b8" stroke-width="3" fill="none"><path d="M330 336h60"/><path d="M585 336h60"/><path d="M840 336h60"/><path d="M1095 336h60"/></g>
+  <g fill="#94a3b8"><path d="m384 326 14 10-14 10z"/><path d="m639 326 14 10-14 10z"/><path d="m894 326 14 10-14 10z"/><path d="m1149 326 14 10-14 10z"/></g>
+  <rect x="100" y="490" width="1400" height="250" rx="24" fill="#ffffff" stroke="#dbe4f0" stroke-width="2"/>
+  <text x="140" y="540" font-family="Arial,'Microsoft YaHei',sans-serif" font-size="22" font-weight="700" fill="#0f766e">知识入库底座</text>
+  <g font-family="Arial,'Microsoft YaHei',sans-serif" text-anchor="middle">
+    <g fill="#f0fdfa" stroke="#14b8a6" stroke-width="2"><rect x="140" y="585" width="210" height="80" rx="16"/><rect x="405" y="585" width="210" height="80" rx="16"/><rect x="670" y="585" width="210" height="80" rx="16"/><rect x="935" y="585" width="210" height="80" rx="16"/><rect x="1200" y="585" width="220" height="80" rx="16"/></g>
+    <g font-size="20" font-weight="700" fill="#0f172a"><text x="245" y="625">文档上传</text><text x="510" y="625">解析归一化</text><text x="775" y="625">切片 + 元数据</text><text x="1040" y="625">Embedding</text><text x="1310" y="625">PostgreSQL + pgvector</text></g>
+    <g font-size="15" fill="#475569"><text x="245" y="650">Word / PDF</text><text x="510" y="650">python-docx / pdfplumber</text><text x="775" y="650">Markdown chunks</text><text x="1040" y="650">text-embedding-v4</text><text x="1310" y="650">可检索证据</text></g>
+  </g>
+  <g stroke="#94a3b8" stroke-width="3" fill="none"><path d="M350 625h55"/><path d="M615 625h55"/><path d="M880 625h55"/><path d="M1145 625h55"/></g>
+  <g fill="#94a3b8"><path d="m399 615 14 10-14 10z"/><path d="m664 615 14 10-14 10z"/><path d="m929 615 14 10-14 10z"/><path d="m1194 615 14 10-14 10z"/></g>
+  <text x="100" y="815" font-family="Arial,'Microsoft YaHei',sans-serif" font-size="18" fill="#64748b">面试讲解重点：回答不是直接生成，而是先检索证据，再由模型基于证据作答，并返回来源。</text>
+</svg>

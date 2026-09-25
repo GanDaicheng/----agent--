@@ -57,7 +57,7 @@ function newThread(): Thread {
 function Welcome({ onPick }: { onPick: (question: string) => void }) {
   return (
     <div className={styles.welcome}>
-      <h2 className={styles.welcomeTitle}>AI 经营分析助手</h2>
+      <h2 className={styles.welcomeTitle}>AI经营分析助手</h2>
       <p className={styles.welcomeText}>
         可以帮你分析经营数据、核对指标口径，并结合业务知识给出建议。
       </p>
@@ -249,7 +249,7 @@ export function BusinessAnalysisWorkspace() {
       />
       <div className={styles.chatColumn}>
         <header className={styles.chatHeader}>
-          <h1 className={styles.chatTitle}>AI 经营分析助手</h1>
+          <h1 className={styles.chatTitle}>AI经营分析助手</h1>
           <p className={styles.chatThreadTitle}>{activeThread.title}</p>
         </header>
         <div className={styles.chatScroll}>

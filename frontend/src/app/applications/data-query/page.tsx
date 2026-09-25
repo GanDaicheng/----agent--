@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 
 import { PageHeader } from "@/components/ui/PageHeader";
+import { ApplicationFlowDiagram } from "@/components/ui/ApplicationFlowDiagram";
 import { DataQueryWorkspace } from "@/components/data-query/DataQueryWorkspace";
 import { getModule, getSection, RETAIL_DATA_NOTE } from "@/features/platform/platform-config";
 
@@ -8,7 +9,7 @@ const SECTION_ID = "applications";
 const MODULE_SLUG = "data-query";
 
 export const metadata: Metadata = {
-  title: "智能问数",
+  title: "基于RAG的智能问数Agent",
   description: "用自然语言查询零售样例数据，生成分析结论和图表建议。",
 };
 
@@ -34,10 +35,22 @@ export const metadata: Metadata = {
  * 不能因为一次误点就花掉一次调用。
  */
 const EXAMPLES = [
-  "2025 年各月销售额趋势怎么样？",
-  "2025 年销售额最高的 10 个商品是哪些？",
-  "不同区域的销售额和订单数有什么差异？",
-  "各商品品类的销售额分别是多少？",
+  {
+    label: "趋势分析",
+    items: ["2025 年各月销售额趋势怎么样？", "2025 年每季度销售额有什么变化？"],
+  },
+  {
+    label: "排行分析",
+    items: ["2025 年销售额最高的 10 个商品是哪些？", "哪些商品的订单数最多？"],
+  },
+  {
+    label: "区域对比",
+    items: ["不同区域的销售额和订单数有什么差异？", "华东和华南的客单价有什么差别？"],
+  },
+  {
+    label: "品类分析",
+    items: ["各商品品类的销售额分别是多少？", "各品类的订单数和销售额如何对比？"],
+  },
 ] as const;
 
 /**
@@ -55,7 +68,8 @@ export default function Page() {
     <article>
       <PageHeader
         sectionName={section?.name ?? "智能应用"}
-        title="智能问数"
+        title="基于RAG的智能问数Agent"
+        align="center"
         subtitle="用自然语言查询零售样例数据，生成分析结论和图表建议。"
         boundary={
           <>
@@ -71,6 +85,8 @@ export default function Page() {
           </>
         }
       />
+
+      <ApplicationFlowDiagram variant="data-query" />
 
       <DataQueryWorkspace examples={EXAMPLES} />
     </article>

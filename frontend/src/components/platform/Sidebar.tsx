@@ -2,13 +2,11 @@ import Link from "next/link";
 
 import {
   EXTRA_NAV_ITEMS,
+  NAV_SECTIONS,
   OVERVIEW_NAV_ITEM,
-  PLATFORM_SECTIONS,
-  STATUS_LABEL,
   getModuleHref,
 } from "@/features/platform/platform-config";
 
-import { StatusBadge } from "./StatusBadge";
 import styles from "./Sidebar.module.css";
 
 type Props = {
@@ -20,6 +18,13 @@ type Props = {
   onNavigate: () => void;
 };
 
+/**
+ * 左侧导航。
+ *
+ * 只渲染 NAV_SECTIONS——`platform-config` 里过滤掉 navHidden 的那一份。
+ * 这里不再显示任何建设状态：状态属于模块自己的页面，放在导航里会让
+ * 一个可以直接使用的平台看起来像一张项目进度表。
+ */
 export function Sidebar({ activeHref, open, onNavigate }: Props) {
   return (
     <nav
@@ -35,6 +40,7 @@ export function Sidebar({ activeHref, open, onNavigate }: Props) {
             className={styles.overviewLink}
             data-active={activeHref === OVERVIEW_NAV_ITEM.href}
             aria-current={activeHref === OVERVIEW_NAV_ITEM.href ? "page" : undefined}
+            title={OVERVIEW_NAV_ITEM.desc}
             onClick={onNavigate}
           >
             {OVERVIEW_NAV_ITEM.name}
@@ -42,12 +48,13 @@ export function Sidebar({ activeHref, open, onNavigate }: Props) {
         </li>
       </ul>
 
-      {PLATFORM_SECTIONS.map((section) => (
-        <section key={section.id} className={styles.group}>
-          <div className={styles.groupHead}>
-            <h2 className={styles.groupTitle}>{section.name}</h2>
-            <StatusBadge status={section.status} size="sm" />
-          </div>
+      {NAV_SECTIONS.map((section) => (
+        <section
+          key={section.id}
+          className={styles.group}
+          data-section={section.id}
+        >
+          <h2 className={styles.groupTitle}>{section.name}</h2>
 
           <ul className={styles.moduleList}>
             {section.modules.map((module) => {
@@ -61,18 +68,10 @@ export function Sidebar({ activeHref, open, onNavigate }: Props) {
                     className={styles.moduleLink}
                     data-active={active}
                     aria-current={active ? "page" : undefined}
-                    title={`${module.name} · ${STATUS_LABEL[module.status]}`}
+                    title={module.summary}
                     onClick={onNavigate}
                   >
-                    <span className={styles.moduleName}>{module.name}</span>
-                    <span
-                      className={styles.dot}
-                      data-status={module.status}
-                      aria-hidden="true"
-                    />
-                    <span className={styles.srOnly}>
-                      {STATUS_LABEL[module.status]}
-                    </span>
+                    {module.name}
                   </Link>
                 </li>
               );
@@ -81,7 +80,7 @@ export function Sidebar({ activeHref, open, onNavigate }: Props) {
         </section>
       ))}
 
-      {/* 不属于任何层级的独立页面。没有状态点——它是讲解性质的一页，没有建设进度。 */}
+      {/* 辅助入口：不属于任何业务层级，用分隔线隔开并推到导航底部 */}
       <ul className={styles.extraList}>
         {EXTRA_NAV_ITEMS.map((item) => {
           const active = item.href === activeHref;
@@ -102,11 +101,6 @@ export function Sidebar({ activeHref, open, onNavigate }: Props) {
           );
         })}
       </ul>
-
-      <p className={styles.footnote}>
-        导航里的圆点表示模块的建设进度。它是人工维护的功能状态，
-        与顶栏检测到的服务连通性是两回事。
-      </p>
     </nav>
   );
 }

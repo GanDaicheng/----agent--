@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 
 import { PageHeader } from "@/components/ui/PageHeader";
+import { ApplicationFlowDiagram } from "@/components/ui/ApplicationFlowDiagram";
 import { getSection, RETAIL_DATA_NOTE } from "@/features/platform/platform-config";
 
 import { KnowledgeQaWorkspace } from "./KnowledgeQaWorkspace";
@@ -8,7 +9,7 @@ import { KnowledgeQaWorkspace } from "./KnowledgeQaWorkspace";
 const SECTION_ID = "applications";
 
 export const metadata: Metadata = {
-  title: "知识问答",
+  title: "RAG知识问答",
   description: "基于零售知识库回答问题，给出回答并列出检索到的参考资料。",
 };
 
@@ -26,11 +27,22 @@ export const metadata: Metadata = {
  * 不能因为一次误点就花掉两次调用。
  */
 const EXAMPLES = [
-  "客单价怎么算？",
-  "为什么高等级会员复购率更高？",
-  "为什么 12 月销售额通常更高？",
-  "订单分析要关联哪些表？",
-  "华东销售额为什么通常更高？",
+  {
+    label: "指标口径",
+    items: ["客单价怎么算？", "销售额和订单金额有什么区别？", "订单数和商品件数有什么区别？"],
+  },
+  {
+    label: "业务规则",
+    items: ["为什么高等级会员复购率更高？", "为什么 12 月销售额通常更高？", "促销期订单量和客单价会怎么变化？"],
+  },
+  {
+    label: "数据字典",
+    items: ["订单分析要关联哪些表？", "销售区域字段在什么表里？", "时间分析应该使用哪个日期字段？"],
+  },
+  {
+    label: "经营解释",
+    items: ["华东销售额为什么通常更高？", "区域销售差异应该从哪些指标解释？"],
+  },
 ] as const;
 
 /**
@@ -51,7 +63,8 @@ export default function Page() {
     <article>
       <PageHeader
         sectionName={section?.name ?? "智能应用"}
-        title="知识问答"
+        title="RAG知识问答"
+        align="center"
         subtitle="基于零售知识库回答问题：业务口径、指标定义、规则说明与数据字典。回答只依据知识库文档，并列出检索到的参考资料。"
         boundary={
           <>
@@ -72,6 +85,8 @@ export default function Page() {
           </>
         }
       />
+
+      <ApplicationFlowDiagram variant="rag" />
 
       <KnowledgeQaWorkspace examples={EXAMPLES} />
     </article>

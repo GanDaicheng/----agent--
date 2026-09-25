@@ -3,7 +3,8 @@
  *
  * 所有路由、模块名称、建设状态、能力说明与依赖关系都集中在这里，
  * 页面组件只负责渲染，不再各自硬编码。
- * 修改这里的状态，左侧导航、顶栏标题与模块页会同步更新。
+ * 修改这里的状态，首页能力卡与模块页会同步更新；左侧导航读的是过滤后的
+ * NAV_SECTIONS，因此某个模块加不加 navHidden 只影响导航。
  *
  * **维护约定**：这里的每一句「当前能力」都必须能在代码或接口里找到对应物。
  * 只登记已经真实可用的能力——这个平台的定位是可演示的最小可用版本，
@@ -85,6 +86,14 @@ export type PlatformModule = {
   /** 该模块在平台中的上下游位置。 */
   dependencies?: string[];
   livePage?: LivePage;
+  /**
+   * 从左侧导航隐藏，但模块本身仍然存在。
+   *
+   * 用来表达「这个页面还在、路由还能访问，只是不再作为导航入口」。
+   * 不要用删除模块来代替它——模块一旦从这里消失，架构图里指向它的
+   * 路径、首页的能力卡都会跟着失去来源。
+   */
+  navHidden?: boolean;
 };
 
 /** 业务中台已从导航中移除，因此只剩三层。 */
@@ -98,6 +107,13 @@ export type PlatformSection = {
   status: ModuleStatus;
   /** 层级状态的补充说明。 */
   statusNote: string;
+  /**
+   * 整层从左侧导航隐藏。
+   *
+   * 层级本身与它的模块页都保留：路由解析、首页能力卡用的仍是这份定义，
+   * 只是左侧导航不再出现这个分组。
+   */
+  navHidden?: boolean;
   modules: PlatformModule[];
 };
 
@@ -134,6 +150,7 @@ const DATA: PlatformSection = {
       summary:
         "PostgreSQL 中的零售样例数据底座，为智能问数与知识问答提供数据基础。",
       status: "building",
+      navHidden: true,
       notice:
         "这里建的是样例表，不是完整的 ODS / DWD / DWS / ADS 分层数仓——五张表直接建成，没有经过分层加工。",
       current: [
@@ -156,6 +173,9 @@ const AI: PlatformSection = {
   name: "AI 中台",
   duty: "把知识、模型与 Agent 能力沉淀为可复用的平台能力",
   status: "building",
+  // 这一层的能力（知识库与 RAG、Agent 编排）都通过「智能应用」交付给用户，
+  // 导航里再单列一层只是重复。层级与模块页保留，首页能力卡与架构页仍在引用。
+  navHidden: true,
   statusNote:
     "知识库与 RAG 已建成并接入 Agent，受控问数 Agent 已跑通并查询真实数据。模型与 Prompt 的可视化配置、通用工作流编排仍待建立。",
   modules: [
@@ -301,17 +321,31 @@ export const PLATFORM_SECTIONS: PlatformSection[] = [
   APPLICATIONS,
 ];
 
+/**
+ * 左侧导航实际渲染的层级。
+ *
+ * 从 PLATFORM_SECTIONS 过滤派生，而不是另写一份：路由解析、首页能力卡与导航
+ * 共用同一份模块定义，导航只是把 navHidden 的层级与模块摘掉。
+ * 所以「隐藏入口」不应该通过删配置来实现——那会连带影响其它引用方。
+ */
+export const NAV_SECTIONS: PlatformSection[] = PLATFORM_SECTIONS.filter(
+  (section) => !section.navHidden,
+).map((section) => ({
+  ...section,
+  modules: section.modules.filter((module) => !module.navHidden),
+}));
+
 export const OVERVIEW_NAV_ITEM = {
   name: "平台总览",
   href: "/",
-  desc: "平台已完成的真实能力与两条处理链路",
+  desc: "平台已跑通的真实能力与两条处理链路",
 };
 
 /**
  * 不属于任何层级的独立页面，渲染在侧边栏最底部。
  *
- * 它们没有建设状态点——状态点表示「这个模块建到哪一步了」，
- * 而技术栈与架构是讲解性质的一页，没有建设进度可言。
+ * 导航里只有它是辅助入口：技术栈与架构是讲解性质的一页，
+ * 既不是业务功能，也没有建设进度可言，所以单独放在分隔线之后。
  */
 export const EXTRA_NAV_ITEMS = [
   {
@@ -320,19 +354,6 @@ export const EXTRA_NAV_ITEMS = [
     desc: "平台用到的技术栈、系统结构与数据流转",
   },
 ];
-
-/**
- * 首页顶部的三个核心功能卡，按展示顺序排列。
- *
- * 只登记「哪个模块」，标题与说明从模块配置里的 livePage 取——
- * 在这里再写一遍文案，就等于同一个功能有了两份会各自漂移的描述。
- */
-export const OVERVIEW_ENTRY_KEYS = [
-  { sectionId: "data", slug: "sources" },
-  { sectionId: "applications", slug: "knowledge-qa" },
-  { sectionId: "applications", slug: "data-query" },
-  { sectionId: "applications", slug: "business-analysis" },
-] as const;
 
 /** 动态路由 app/<section>/[module] 需要的分段参数，供 generateStaticParams 使用。 */
 export function getSection(id: string): PlatformSection | undefined {
@@ -380,33 +401,4 @@ export function resolveNav(
   }
 
   return undefined;
-}
-
-/**
- * 解析首页的功能卡。
- *
- * 配置里登记了模块但模块没有 livePage（说明还没有真实页面）时会跳过它，
- * 而不是渲染一个点了没反应的卡片。
- */
-export function getOverviewEntries(): Array<
-  LivePage & { key: string; moduleName: string; sectionName: string }
-> {
-  const entries: Array<
-    LivePage & { key: string; moduleName: string; sectionName: string }
-  > = [];
-
-  for (const { sectionId, slug } of OVERVIEW_ENTRY_KEYS) {
-    const section = getSection(sectionId);
-    const moduleConfig = section ? getModule(sectionId, slug) : undefined;
-    if (!section || !moduleConfig?.livePage) continue;
-
-    entries.push({
-      key: `${sectionId}/${slug}`,
-      moduleName: moduleConfig.name,
-      sectionName: section.name,
-      ...moduleConfig.livePage,
-    });
-  }
-
-  return entries;
 }

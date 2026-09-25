@@ -26,6 +26,7 @@
   margin: 0 0 var(--space-1);
   font-size: var(--text-lg);
   font-weight: var(--weight-semibold);
+  text-align: center;
 }
 
 .cardCaption {
@@ -33,6 +34,7 @@
   font-size: var(--text-sm);
   line-height: var(--leading-relaxed);
   color: var(--text-muted);
+  text-align: center;
 }
 
 /* ------------------------------- 输入区 ------------------------------- */
@@ -107,6 +109,28 @@
   margin: 0 0 var(--space-3);
   font-size: var(--text-xs);
   color: var(--text-muted);
+  text-align: center;
+}
+
+.exampleGroups {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-3);
+}
+
+.exampleGroup {
+  min-width: 0;
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-muted);
+}
+
+.exampleGroupTitle {
+  margin: 0 0 var(--space-2);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
+  color: var(--primary);
 }
 
 .exampleList {
@@ -129,6 +153,7 @@
   border-radius: var(--radius-pill);
   cursor: pointer;
   text-align: left;
+  width: 100%;
 }
 
 .example:hover:not(:disabled) {
@@ -385,6 +410,10 @@
 }
 
 @media (max-width: 720px) {
+  .exampleGroups {
+    grid-template-columns: 1fr;
+  }
+
   .barRow {
     grid-template-columns: minmax(0, 1fr);
     gap: var(--space-1);

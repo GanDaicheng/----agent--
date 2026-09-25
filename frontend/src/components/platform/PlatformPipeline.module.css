@@ -1,0 +1,137 @@
+/*
+ * 平台主链路。
+ *
+ * 排布方式沿用应用页的 ApplicationFlowDiagram：横向一行 → 窄屏纵向一列，
+ * 连接线也跟着从横线转成竖线。这样站内所有流程图看起来是同一套东西。
+ *
+ * 节点高度不设固定值，让内容自己撑开——六个节点的文字长短不一，
+ * 写死高度就会出现某个节点文字被裁掉。
+ */
+
+.pipeline {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(168px, 1fr));
+  gap: var(--space-3);
+  margin: 0;
+  padding: var(--space-5);
+  list-style: none;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+
+.node {
+  min-width: 0;
+}
+
+.nodeBody {
+  min-width: 0;
+}
+
+.nodeTop {
+  display: flex;
+  align-items: center;
+  height: 26px;
+  margin-bottom: var(--space-2);
+}
+
+.number {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: var(--primary-soft);
+  border: 1px solid var(--primary-border);
+  color: var(--primary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.connector {
+  flex: 1;
+  height: 2px;
+  margin: 0 var(--space-2);
+  background: var(--primary-border);
+}
+
+.nodeName {
+  margin: 0;
+  font-size: var(--text-base);
+  font-weight: var(--weight-semibold);
+  line-height: var(--leading-tight);
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.nodeRole {
+  margin: var(--space-2) 0 0;
+  font-size: var(--text-xs);
+  line-height: var(--leading-relaxed);
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+
+.nodeTech {
+  margin: var(--space-2) 0 0;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: var(--leading-relaxed);
+  color: var(--text-subtle);
+  overflow-wrap: anywhere;
+}
+
+.nodeLink {
+  display: inline-block;
+  margin-top: var(--space-2);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  color: var(--primary);
+  text-decoration: none;
+}
+
+.nodeLink:hover {
+  text-decoration: underline;
+}
+
+@media (max-width: 760px) {
+  /* 纵向排列：编号在左、内容在右，连接线转成竖线 */
+  .pipeline {
+    grid-template-columns: 1fr;
+  }
+
+  /*
+   * .node 只有两个子元素（编号列 + .nodeBody），所以这里恰好只有 1 行，
+   * grid-row: 1 / -1 才能正确解析成「跨满这一行」。
+   * 如果文字不包一层，它们会各自成为网格项并被自动排进编号列。
+   */
+  .node {
+    display: grid;
+    grid-template-columns: 26px minmax(0, 1fr);
+    column-gap: var(--space-3);
+  }
+
+  /* 编号在上、竖线在下，所以要改成纵向 flex；横排时竖线会被挤成 0 宽 */
+  .nodeTop {
+    grid-column: 1;
+    grid-row: 1 / -1;
+    height: 100%;
+    flex-direction: column;
+    align-items: center;
+  }
+
+  .nodeBody {
+    grid-column: 2;
+  }
+
+  .connector {
+    flex: 1;
+    width: 2px;
+    height: auto;
+    min-height: 20px;
+    margin: var(--space-2) 0 0;
+  }
+}

@@ -74,6 +74,15 @@ export type WorkflowDefinition = {
   nodeIds: string[];
   edgeIds: string[];
   steps: WorkflowStep[];
+  /**
+   * 细粒度的技术步骤序列，逐项对应真实环节。
+   *
+   * 与 steps 的分工：steps 是四个带说明的粗粒度阶段，给架构页和导出图用；
+   * pipeline 是「一眼看完的技术动作清单」，给平台总览页用。
+   * 两者放在同一个对象里，是为了让同一条链路只有一个定义——
+   * 拆到两个文件去写，改了 A 忘了 B 只是时间问题。
+   */
+  pipeline: string[];
 };
 
 export type ArchitectureModel = {
@@ -180,12 +189,12 @@ const nodes: ArchitectureNode[] = [
     subtitle: "pgvector · Async data access",
     status: "current",
     detail: {
-      role: "同时承载零售星型模型、知识库、Agent 运行状态和长期记忆。",
+      role: "用 pgvector 做知识库的向量检索，同时保存零售星型模型、Agent 运行状态与长期记忆。",
       technologies: ["PostgreSQL 16", "pgvector", "SQLAlchemy Async", "asyncpg", "Alembic"],
       inputs: ["零售样例数据", "知识文档切片", "向量", "运行状态与偏好"],
       outputs: ["关系查询结果", "向量/关键词候选", "Checkpoint", "Store"],
       interfaces: ["SQLAlchemy AsyncSession", "asyncpg", "Alembic migrations"],
-      supports: ["数据仓库", "知识问答", "智能问数", "AI 经营分析助手"],
+      supports: ["数据仓库", "知识问答", "智能问数", "AI经营分析助手"],
       evidence: "数据库迁移包含零售数据、知识库及经营分析相关持久化结构。",
     },
   },
@@ -206,7 +215,7 @@ const nodes: ArchitectureNode[] = [
       inputs: ["Prompt", "文档文本", "检索候选", "工具执行结果"],
       outputs: ["模型消息", "1024 维向量", "精排分数", "结构化决策"],
       interfaces: ["OpenAI-compatible API", "DashScope-compatible API"],
-      supports: ["混合检索", "智能问数", "AI 经营分析助手"],
+      supports: ["混合检索", "智能问数", "AI经营分析助手"],
       evidence: "模型配置通过兼容接口接入聊天、Embedding 与 Rerank 服务。",
     },
   },
@@ -240,7 +249,7 @@ const nodes: ArchitectureNode[] = [
       inputs: ["自然语言问题", "知识切片与向量"],
       outputs: ["融合候选", "精排上下文", "带来源答案"],
       interfaces: ["RAG answer API", "Agent RAG tool"],
-      supports: ["知识问答", "智能问数解释", "AI 经营分析助手"],
+      supports: ["知识问答", "智能问数解释", "AI经营分析助手"],
       evidence: "检索链路包含查询改写、双路召回、RRF、Rerank 与来源返回。",
     },
   },
@@ -257,7 +266,7 @@ const nodes: ArchitectureNode[] = [
       inputs: ["模型生成 SQL", "允许访问的数据资产元数据"],
       outputs: ["校验结果", "安全 SQL", "结构化查询结果"],
       interfaces: ["safe query service", "data query tool"],
-      supports: ["智能问数", "AI 经营分析助手"],
+      supports: ["智能问数", "AI经营分析助手"],
       evidence: "智能问数链路对 SQL 做语法树校验并限制为只读查询。",
     },
   },
@@ -274,7 +283,7 @@ const nodes: ArchitectureNode[] = [
       inputs: ["thread_id", "Agent 状态", "用户偏好", "报告内容"],
       outputs: ["可恢复运行", "持久化报告", "长期记忆上下文"],
       interfaces: ["thread API", "run API", "preference API"],
-      supports: ["AI 经营分析助手"],
+      supports: ["AI经营分析助手"],
       evidence: "经营分析模块包含运行、线程、报告、产物及偏好持久化。",
     },
   },
@@ -291,7 +300,7 @@ const nodes: ArchitectureNode[] = [
       inputs: ["系统提示词", "用户消息", "工具定义", "模型配置"],
       outputs: ["模型消息", "工具调用请求", "结构化输出"],
       interfaces: ["LangChain Runnable", "BaseTool"],
-      supports: ["智能问数", "AI 经营分析助手"],
+      supports: ["智能问数", "AI经营分析助手"],
       evidence: "模型和 Agent 工具通过 LangChain 标准接口接入。",
     },
   },
@@ -308,7 +317,7 @@ const nodes: ArchitectureNode[] = [
       inputs: ["自然语言问题", "会话上下文", "数据资产描述"],
       outputs: ["SQL", "查询结果", "业务结论", "图表建议"],
       interfaces: ["data query API", "business analysis data-query tool"],
-      supports: ["智能问数", "AI 经营分析助手"],
+      supports: ["智能问数", "AI经营分析助手"],
       evidence: "智能问数以状态图编排生成、校验、修复、执行与解释步骤。",
     },
   },
@@ -325,7 +334,7 @@ const nodes: ArchitectureNode[] = [
       inputs: ["复杂经营目标", "长期偏好", "工具描述", "历史状态"],
       outputs: ["任务计划", "工具调用序列", "证据链", "经营分析报告"],
       interfaces: ["data-query tool", "RAG tool", "report tool"],
-      supports: ["AI 经营分析助手"],
+      supports: ["AI经营分析助手"],
       evidence: "经营分析使用 Deep Agents 主管调用既有问数与知识检索能力。",
     },
   },
@@ -342,7 +351,7 @@ const nodes: ArchitectureNode[] = [
       inputs: ["Agent 运行事件", "报告文本增量", "错误事件"],
       outputs: ["实时执行时间线", "流式报告", "可见错误状态"],
       interfaces: ["text/event-stream"],
-      supports: ["AI 经营分析助手"],
+      supports: ["AI经营分析助手"],
       evidence: "经营分析运行接口以 SSE 返回 status、tool 和 report_delta 等事件。",
     },
   },
@@ -376,7 +385,7 @@ const nodes: ArchitectureNode[] = [
       inputs: ["REST 数据", "SSE 事件", "用户操作"],
       outputs: ["业务页面", "交互反馈", "数据与报告展示"],
       interfaces: ["App Router", "typed fetch clients"],
-      supports: ["数据采集", "数据仓库", "知识问答", "智能问数", "AI 经营分析助手"],
+      supports: ["数据采集", "数据仓库", "知识问答", "智能问数", "AI经营分析助手"],
       evidence: "前端使用 Next.js App Router 和 React 组件实现五个当前业务入口。",
     },
   },
@@ -456,7 +465,7 @@ const nodes: ArchitectureNode[] = [
     id: "app-business-analysis",
     layerId: "applications",
     kind: "application",
-    title: "AI 经营分析助手",
+    title: "AI经营分析助手",
     subtitle: "复杂目标 → 分析报告",
     status: "current",
     href: PAGE_HREFS.businessAnalysis,
@@ -522,10 +531,22 @@ const workflows: WorkflowDefinition[] = [
       { id: "rag-retrieve", title: "改写与双路召回", description: "改写查询，同时执行 pgvector 相似度检索与关键词召回。", nodeIds: ["hybrid-rag", "model-services", "postgres"] },
       { id: "rag-answer", title: "融合、精排与回答", description: "用 RRF 合并候选，经 qwen3-rerank 精排后生成带来源回答。", nodeIds: ["hybrid-rag", "model-services", "fastapi", "nextjs", "app-knowledge-qa"] },
     ],
+    pipeline: [
+      "上传 Word / PDF",
+      "python-docx / pdfplumber 解析",
+      "Markdown 归一化",
+      "文档切片与元数据提取",
+      "text-embedding-v4 向量化",
+      "PostgreSQL + pgvector 入库",
+      "向量召回 + 关键词召回",
+      "RRF 融合",
+      "qwen3-rerank 精排",
+      "带来源回答",
+    ],
   },
   {
     id: "data-query",
-    title: "智能问数",
+    title: "基于 RAG 的智能问数 Agent",
     shortTitle: "NL2SQL",
     summary: "把业务问题转换为安全 SQL，并输出可解释的数据结论。",
     outcome: "用户得到经过安全约束的 SQL、查询结果、结论和图表建议。",
@@ -540,10 +561,21 @@ const workflows: WorkflowDefinition[] = [
       { id: "query-execute", title: "只读执行", description: "在只读事务和查询超时约束内访问零售星型模型。", nodeIds: ["safe-sql", "postgres", "app-warehouse"] },
       { id: "query-explain", title: "解释与建议", description: "结合必要的 RAG 口径补充，输出结论、表格与图表建议。", nodeIds: ["hybrid-rag", "langgraph-query", "fastapi", "nextjs", "app-data-query"] },
     ],
+    pipeline: [
+      "自然语言问题",
+      "意图识别",
+      "数据资产发现",
+      "RAG 补充指标口径",
+      "SQL 生成",
+      "sqlglot AST 安全校验",
+      "失败时一次自动修复",
+      "只读事务查询",
+      "结果解释与图表建议",
+    ],
   },
   {
     id: "business-analysis",
-    title: "AI 经营分析",
+    title: "AI经营分析助手",
     shortTitle: "Agent",
     summary: "由主管 Agent 自主拆解复杂目标并组合问数与知识工具。",
     outcome: "用户可实时看到证据收集过程，并获得可追溯、可恢复的经营分析报告。",
@@ -557,6 +589,16 @@ const workflows: WorkflowDefinition[] = [
       { id: "analysis-plan", title: "主管拆解任务", description: "Deep Agents 在 Agent Loop 中规划子任务并选择合适工具。", nodeIds: ["deep-agents", "langchain", "model-services"] },
       { id: "analysis-tools", title: "调用问数与 RAG", description: "复用 LangGraph 智能问数和混合检索能力收集数据与知识证据。", nodeIds: ["langgraph-query", "safe-sql", "hybrid-rag", "postgres"] },
       { id: "analysis-report", title: "持久化并流式生成", description: "Checkpoint / Store 保存状态，SSE 增量返回执行过程和最终报告。", nodeIds: ["agent-persistence", "sse-events", "fastapi", "nextjs", "app-business-analysis"] },
+    ],
+    pipeline: [
+      "经营分析目标",
+      "Deep Agents 主管 Agent 拆解",
+      "调用智能问数工具",
+      "调用 RAG 知识工具",
+      "Agent Loop 多轮分析",
+      "PostgreSQL Checkpoint / Store",
+      "SSE 实时过程输出",
+      "结构化经营分析报告",
     ],
   },
 ];

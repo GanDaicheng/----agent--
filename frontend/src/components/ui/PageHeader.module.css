@@ -110,3 +110,30 @@
 .boundaryBody p + p {
   margin-top: var(--space-2);
 }
+
+/* 业务应用页的页头作为“产品说明卡”展示时，标题、职责与边界居中，
+   但边界正文仍保持段落可读的行宽。面包屑也居中，避免上半区视觉重心偏移。 */
+.header[data-align="center"] .breadcrumb {
+  justify-content: center;
+}
+
+.header[data-align="center"] .titleRow {
+  justify-content: center;
+}
+
+.header[data-align="center"] .subtitle {
+  max-width: 72ch;
+  margin-left: auto;
+  margin-right: auto;
+  text-align: center;
+}
+
+.header[data-align="center"] .boundary {
+  display: block;
+  text-align: center;
+}
+
+.header[data-align="center"] .boundaryTag {
+  display: inline-block;
+  margin-bottom: var(--space-2);
+}
