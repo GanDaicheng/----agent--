@@ -4,7 +4,9 @@
 系统检索指标口径与数据目录、生成安全 SQL、查询数据仓库，最后返回结论与图表；
 另一条链路把业务文档切片向量化入库，回答口径与规则类问题。
 
-零售只是当前用来把链路跑通的演示业务，架构上可扩展到其他业务场景。
+当前同时接入两类业务数据：可复现的零售样例数仓，以及经过用户级稳定抽样的
+天猫 IJCAI 2015 真实公开数据。两套数据共用同一套领域路由、指标目录、安全 SQL、
+PostgreSQL 查询和 RAG 知识检索链路，并禁止跨领域 JOIN。
 
 ## 项目目标
 
@@ -16,6 +18,17 @@
 4. 执行查询，取回数据
 5. 输出结论文本和图表，并记录本次运行过程
 
+## 已接入的数据与能力
+
+| 数据域 | 数据性质 | 数据规模 | 主要用途 |
+| --- | --- | --- | --- |
+| 零售样例 | 固定随机种子生成，可重复构建 | 240 位客户、24 个商品、3,404 条订单明细 | 销售额、客单价、区域、商品和会员复购分析 |
+| 天猫 IJCAI 2015 | 真实公开数据，按 `user_id % 55 = 0` 稳定抽样 | 7,712 位用户、998,542 条行为、9,558 个复购样本 | 行为趋势、商家/类目排行、用户购买广度、历史复购和复购样本分析 |
+
+结构化数据进入 PostgreSQL：Silver 层保留明细，Gold 层提供可安全查询的汇总表；
+指标口径、字段解释、抽样规则和数据限制写成 Markdown，切片并向量化进入 pgvector。
+数字只由 SQL 精确计算，知识库只负责解释口径与限制。
+
 ## 当前技术栈
 
 | 层次 | 技术 | 状态 |
@@ -23,12 +36,12 @@
 | 后端服务 | FastAPI + Uvicorn | 已接入 |
 | Agent 编排 | LangChain / LangGraph | 已接入 |
 | 模型接入 | OpenAI 兼容接口（DeepSeek / Qwen / OpenAI） | 已接入 |
-| 数据存储 | PostgreSQL 16 + pgvector | 已接入：业务样例表与知识库向量表均已建出 |
+| 数据存储 | PostgreSQL 16 + pgvector | 已接入：零售数仓、天猫 Silver/Gold 表与知识库向量表均已建出 |
 | 数据访问 | SQLAlchemy 2.x（异步）+ asyncpg | 已接入：受控只读查询与知识库读写都在用 |
-| 数据库迁移 | Alembic | 已接入：零售数仓与知识库（含检索元数据）都由迁移建出 |
+| 数据库迁移 | Alembic | 已接入：零售、知识库与天猫数据域均由迁移建表，当前 head 为 `bea2b5793f31` |
 | 向量化 / 精排模型 | 阿里云百炼：`text-embedding-v4`（1024 维）、`qwen3-rerank` | 已接入：前者走 OpenAI 兼容接口，后者走独立的 `/reranks` 接口 |
 | 检索增强 | 查询改写 + 向量/关键词混合召回 + RRF 融合 + 精排 | 已接入：知识问答走这条链路，每一步失败都能降级 |
-| 前端工作台 | Next.js 16 + React 19 + TypeScript（App Router） | 已接入：四个功能页，其中三个调用后端接口 |
+| 前端工作台 | Next.js 16 + React 19 + TypeScript（App Router） | 已接入：四个功能页，均按用户操作调用后端接口 |
 | 本地环境 | Docker Compose | 已接入：PostgreSQL + FastAPI + Next.js 三服务一键启动 |
 
 ## 目录结构
@@ -40,11 +53,12 @@ backend/
     api/              # HTTP 路由层，协议定义与请求校验
     agent/            # LangGraph 编排、工具注册、提示词
     core/             # 配置、日志、异常、路径等基础设施
-    models/           # 数据库 ORM 模型（零售数仓 + 知识库）
+    models/           # 数据库 ORM 模型（零售数仓 + 天猫 Silver/Gold + 知识库）
     services/         # 业务服务层：检索（改写/向量/关键词/RRF/精排）、入库、回答
     repositories/     # 数据访问层：database.py 管理异步引擎与连接，不含表结构
-  alembic/            # 数据库迁移（零售数仓 → 知识库 → 检索元数据）
-  scripts/            # 冒烟与运维脚本（embedding、检索、精排、元数据回填）
+  alembic/            # 数据库迁移（零售数仓 → 知识库 → 检索元数据 → 天猫数据域）
+  knowledge_seed/     # 零售与天猫的指标口径、数据字典和业务规则
+  scripts/            # 数据导入、验证、知识入库、embedding、检索与精排脚本
   Dockerfile          # 后端生产镜像：python:3.14-slim + requirements.txt + app/
   tests/              # 后端自动化测试（不需数据库、不调真实模型）
   requirements-dev.txt# 仅开发/测试依赖，不进生产镜像
@@ -395,6 +409,125 @@ python scripts/verify_retail_data.py
 注意 `alembic.ini` 必须保持纯 ASCII：Alembic 会按操作系统区域编码读取该文件，
 在中文 Windows 上按 GBK 解析，写入中文注释会直接抛 `UnicodeDecodeError`。
 
+## 天猫 IJCAI 2015 真实数据接入
+
+这条流水线直接从官方 `data_format1.zip` 流式读取 CSV，不需要先解压约 1.9 GB 的行为日志。
+四个文件使用同一条用户级规则 `user_id % sample_modulus == sample_residue` 抽样，保证用户画像、
+行为日志和复购样本之间仍能关联。默认参数为 `55 / 0`。
+
+### 原始文件与已导入规模
+
+| 原始文件 | 内容 | 原始行数 | 默认抽样后 |
+| --- | --- | ---: | ---: |
+| `user_info_format1.csv` | 用户画像：用户、年龄段、性别 | 424,170 | 7,712 |
+| `user_log_format1.csv` | 用户行为：商品、类目、商家、品牌、日期、动作类型 | 54,925,330 | 998,542 |
+| `train_format1.csv` | 训练集用户商家对与复购标签 | 260,864 | 4,700 |
+| `test_format1.csv` | 测试集用户商家对；官方 `prob` 列为空，等待模型预测 | 261,477 | 4,858 |
+
+抽样后的行为日期为 2014-05-11 至 2014-11-12，动作分布为：
+点击 881,857、加购 1,343、收藏 55,306、购买 60,036。
+
+### PostgreSQL 表设计
+
+| 分层 | 表 | 用途 |
+| --- | --- | --- |
+| 运行台账 | `tmall_ingestion_runs` | 记录文件哈希、抽样参数、状态、行数、耗时和受控错误分类 |
+| Silver | `tmall_users` | 抽样用户画像 |
+| Silver | `tmall_user_events` | 用户行为明细；仅供导入与汇总，不进入问数白名单 |
+| Silver | `tmall_repurchase_samples` | train/test 复购样本；test 的 `probability` 可空 |
+| Gold | `tmall_daily_metrics` | 日期 × 行为类型的事件数与用户数，共 696 行 |
+| Gold | `tmall_merchant_metrics` | 商家行为、购买用户与历史复购指标，共 4,991 行 |
+| Gold | `tmall_category_metrics` | 类目行为与购买用户指标，共 1,186 行 |
+| Gold | `tmall_user_metrics` | 用户活跃、购买商家数、复购与购买广度，共 7,712 行 |
+| Gold | `tmall_funnel_metrics` | click/cart/favorite/buy 的事件数、用户数和相对点击倍数，共 4 行 |
+| Gold | `tmall_repurchase_metrics` | train/test 样本及标签汇总，共 3 行 |
+
+Gold 表在每次导入时由 Silver 明细整表重算，并与 Silver 写入处于同一个事务。
+`--replace` 的清空、COPY 和 Gold 重算要么全部成功，要么全部回滚。
+智能问数只开放六张 Gold 表，避免模型查询单个用户的完整行为轨迹。
+
+### 建表 导入 验证
+
+下面的命令在 `backend/` 目录执行。`<zip-path>` 替换为本机的 `data_format1.zip` 路径。
+
+```powershell
+cd backend
+
+# 1. 建表
+python -m alembic upgrade head
+
+# 2. 只读扫描、校验和统计，不写数据库
+python scripts/ingest_tmall_data.py --zip "<zip-path>" --dry-run
+
+# 3. 正式导入默认稳定样本
+python scripts/ingest_tmall_data.py --zip "<zip-path>" --sample-modulus 55 --sample-residue 0 --batch-size 10000
+
+# 4. 核对规模、动作分布、日期、孤儿记录及 Gold/Silver 一致性
+python scripts/verify_tmall_data.py
+
+# 5. 可选：检查同一文件重复执行会安全跳过
+python scripts/verify_tmall_data.py --check-idempotency --zip "<zip-path>"
+
+# 6. 将零售和天猫知识文档递归切片并向量化入库
+python scripts/ingest_knowledge.py --dry-run
+python scripts/ingest_knowledge.py
+```
+
+端到端冒烟脚本会在临时 schema 中执行 COPY、Gold 汇总和约束检查，最后整体回滚：
+
+```powershell
+python scripts/smoke_tmall_pipeline.py
+```
+
+完整操作与设计说明见：
+
+- [天猫数据接入运行手册](docs/tmall-data-pipeline-runbook.md)
+- [天猫数据接入面试讲解稿](docs/tmall-data-pipeline-interview.md)
+- [天猫数据导入与可询问问题清单](docs/天猫数据导入与可询问问题清单.docx)
+
+### 向量知识库内容
+
+天猫结构化明细不进入向量库。向量库只保存四份知识文档：业务背景、数据字典、指标口径、
+抽样与质量说明。当前天猫知识共 4 份文档、29 个切片；当前数据库合计 26 份知识文档、
+462 个切片。检索流程为查询改写、向量与关键词混合召回、RRF 融合、Reranker 精排和 Top-K 回答。
+
+### 可以询问的问题
+
+智能问数适合回答需要聚合计算的问题，例如：
+
+- 天猫每天的点击、收藏、加购和购买趋势如何？
+- 哪一天购买行为最多？双十一前后行为量有什么变化？
+- 点击、收藏、加购和购买分别有多少事件、多少用户？
+- 购买用户数最多的前 10 个商家有哪些？
+- 哪些商家的历史复购用户数或历史复购率最高？
+- 哪些商家点击很多但购买用户较少？
+- 购买用户数最多的前 10 个类目有哪些？
+- 哪些类目收藏或加购较高，但购买相对较低？
+- 有购买行为的用户有多少？购买过多个商家的用户有多少？
+- 同一商家至少购买两次的历史复购用户有多少？
+- train 与 test 分别有多少个复购样本？
+- train 中正样本有多少，正样本率是多少？
+
+知识库问答适合回答口径和规则，例如：
+
+- `action_type` 的 0、1、2、3 分别代表什么？
+- 为什么结构化数据进入 PostgreSQL，而指标说明进入向量库？
+- 用户级稳定抽样为什么不会破坏跨文件关联？
+- 历史复购、购买广度和 train 标签有什么区别？
+- 为什么 test 的 `probability` 是空值？
+- 为什么漏斗的 `user_rate` 可能大于 1？
+- 为什么不能把 buy 行数直接叫订单数？
+- 为什么天猫表和零售表不允许跨领域 JOIN？
+
+### 数据边界
+
+- 数据集没有金额、订单号和件数，不能回答 GMV、销售额、客单价或真实订单量。
+- 商品、商家、品牌和类目只有匿名 ID，不能回答名称、价格、地区或行业信息。
+- `buy` 表示购买行为记录，不等于一笔独立订单。
+- 没有 `session_id` 和严格的事件顺序，不能做真正的会话级路径漏斗。
+- `tmall_funnel_metrics.user_rate` 的分母固定为点击用户，它是相对点击的倍数，可能大于 1，不能直接显示成百分比。
+- 当前数据是约 1/55 的稳定样本，绝对数量只代表样本；比例与排行也不能直接外推为全量平台结论。
+
 ## 数据服务：受控只读查询接口
 
 数据中台阶段的第 2 小步：提供一个受控的分析 SQL 查询服务，让调用方提交**经过严格限制的
@@ -448,13 +581,14 @@ POST /api/v1/data/query
 
 | 项 | 白名单 |
 | --- | --- |
-| 表 | `customers` `products` `regions` `date_dim` `orders` |
+| 表 | 零售五张表；天猫六张 Gold 表 `tmall_daily_metrics` `tmall_merchant_metrics` `tmall_category_metrics` `tmall_user_metrics` `tmall_funnel_metrics` `tmall_repurchase_metrics` |
 | 函数 | `COUNT` `SUM` `AVG` `MIN` `MAX`（含 `COUNT(DISTINCT ...)`） |
 | 语句形态 | 单条 `SELECT`，`JOIN` / `WHERE` / `GROUP BY` / `ORDER BY` / `LIMIT` / `AS` 别名 |
 
 字段白名单登记在 `safe_query.py` 的 `ALLOWED_COLUMNS`，字段必须写完整表名
 （`orders.net_amount`，`net_amount` 会被拒绝）。`ORDER BY sales_amount` 这种引用输出别名的
-标准写法是允许的——别名只能指向已经校验过的投影。
+标准写法是允许的——别名只能指向已经校验过的投影。零售表和天猫表不能出现在同一条
+SQL 中，防止对时间、主体和口径互不相干的数据做出“能执行但没有业务意义”的关联。
 
 ### 拒绝的内容
 
@@ -498,7 +632,7 @@ curl -s -X POST http://localhost:8000/api/v1/data/query `
 ### 安全边界（务必阅读）
 
 这是**本地开发原型**：接口**没有身份认证、没有权限控制、没有行级数据权限**，
-任何能访问 8000 端口的人都可以查询这五张表的白名单字段。
+任何能访问 8000 端口的人都可以查询白名单表的白名单字段。
 
 生产环境必须补齐：身份认证、按用户/角色的表与字段授权、行级数据权限过滤、
 按调用方的限流与配额，以及把 SQL 审计写入独立通道（而不是普通应用日志）。
@@ -520,7 +654,7 @@ curl -s -X POST http://localhost:8000/api/v1/data/query `
 → execute_query（await 执行器）
      → query_execution.execute_real_query
      → app.services.safe_query.execute_safe_query（第 2 层 AST 校验 + 只读事务）
-     → PostgreSQL 真实零售样例数据
+     → PostgreSQL 零售样例数据或天猫真实抽样数据
 → explain_result（LLM 解读结果）
 → suggest_visualization（纯规则给出图表建议）
 → finish
@@ -802,7 +936,7 @@ python backend/scripts/smoke_reranker.py                           # 精排接�
 
 ### 已知局限
 
-- 当前只有 6 份文档、48 条切片，向量检索用**精确顺序扫描**（不建近似索引）——这个量级下它更快也更准，等切片上千再补索引，检索代码不用改。
+- 当前数据库快照为 26 份文档、462 条切片，其中天猫知识为 4 份文档、29 条切片。向量检索仍使用**精确顺序扫描**（不建近似索引）；等切片上千后再评估 HNSW/IVFFlat，检索接口不需要改变。
 - 查询改写与精排各增加一次外部模型调用，意味着更多时延与费用；两者都可以用开关关掉。
 - 检索分数只反映「本次请求内的排序」，不是答案正确率。
 - PDF 标题识别是启发式的；扫描件需要 OCR。
@@ -934,7 +1068,7 @@ http://127.0.0.1:3000
 ### 页面边界
 
 ```text
-当前使用本地零售样例数据，不是企业真实生产数据
+当前使用本地零售样例数据与天猫 IJCAI 2015 公开数据的稳定抽样，不是企业生产数据
 每次提问都会调用配置的模型服务，请不要输入敏感信息
 口径与规则类问题会转交给知识库链路作答（见「知识库问答（RAG 检索增强）」）
 尚未接入用户权限与会话记忆
@@ -966,7 +1100,7 @@ npm run start    # 以生产模式启动，需先 build
 
 ### 当前前端状态
 
-前端已完成工程初始化并容器化（见 `frontend/Dockerfile`），共有**三个会调用后端接口的
+前端已完成工程初始化并容器化（见 `frontend/Dockerfile`），共有**四个会调用后端接口的
 交互页面**：
 
 | 页面 | 地址 | 调用的接口 |
@@ -974,6 +1108,7 @@ npm run start    # 以生产模式启动，需先 build
 | 数据采集 | `/data/sources` | `POST` / `GET /api/v1/rag/documents` |
 | 知识问答 | `/applications/knowledge-qa` | `POST /api/v1/rag/answer` |
 | 智能问数 | `/applications/data-query` | `POST /api/v1/agent/data-query` |
+| 经营分析 | `/applications/business-analysis` | Deep Agents 经营分析接口与运行状态流 |
 
 其余页面（数据仓库、技术栈与架构、Agent 中心、知识库与 RAG）都是**由前端静态配置
 渲染的说明页**，不请求接口，因此不启动后端也能正常打开。
@@ -982,7 +1117,7 @@ npm run start    # 以生产模式启动，需先 build
 模型与 Prompt、工作流与工具、AI 运营、经营驾驶舱都不在导航里——它们既没有实现，
 也不该有一个点进去空空如也的入口。
 
-这三个页面都**在首次打开时不发起任何请求**，只有用户点了按钮才会提交。
+这些页面都**在首次打开时不发起分析请求**，只有用户主动操作后才会提交。
 
 顶栏的「检查服务」按钮会调用 `GET /api/v1/health`，只探测后端进程与数据库连接，
 **不自动轮询**；它不覆盖模型服务与 embedding 服务是否可用。
@@ -1051,8 +1186,9 @@ npm run start    # 以生产模式启动，需先 build
 - [x] RAG-13.5：可插拔精排（百炼 `qwen3-rerank`，供应商故障退回 RRF 顺序）
 - [x] RAG-13.6：接入正式知识问答链路（改写 → 混合召回 → 精排 → 回答，含检索摘要）
 - [x] RAG-13.7：前端展示检索过程与召回方式
-- [ ] 阶段六：数据目录与指标语义层
-- [ ] 阶段七：安全 SQL 生成与查询执行
+- [x] 天猫 IJCAI 2015：真实 ZIP 流式导入、稳定抽样、Silver/Gold 分层、幂等与原子覆盖、校验脚本和领域隔离
+- [x] 阶段六：代码化数据目录与指标语义层（零售/天猫领域路由、指标公式、字段说明与数据集限制）
+- [x] 阶段七：安全 SQL 生成与查询执行（双层 AST 校验、只读事务、表字段白名单、跨领域 JOIN 拦截）
 - [ ] 阶段八：运行记录与可观测性
 
 后续可做：把知识问答与智能问数合成一条链路（同一个问题既能查数也能查口径）、
