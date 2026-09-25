@@ -13,7 +13,7 @@ describe("architecture interview export", () => {
 
     expect(svg).toContain('<svg xmlns="http://www.w3.org/2000/svg"');
     expect(svg).toContain('width="1920" height="1080" viewBox="0 0 1920 1080"');
-    expect(svg).toContain("InsightFlow 数据智能平台技术与业务全景");
+    expect(svg).toContain("InsightFlow 数据智能 Agent 平台技术与业务全景");
     expect(svg).toContain("</svg>");
   });
 
